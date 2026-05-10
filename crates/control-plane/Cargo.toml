@@ -1,0 +1,13 @@
+[package]
+name = "control-plane"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lbc-control-plane"
+path = "src/main.rs"
+
+[dependencies]
+shared.workspace = true
