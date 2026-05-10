@@ -66,12 +66,12 @@ Active phase: **Phase 0 — Foundations**.
 - [ ] minimal admin web (list accounts, branches, licenses) — PR B
 
 ### 0.9 Activation flow (E2E)
-- [ ] Edge: hardware fingerprint module (CPU, MAC, board serial, TPM EK, OS install ID; N-of-M match)
-- [ ] Edge: license file storage + signature verify on every start
-- [ ] Edge: first-launch UX prompts for key → calls Control Plane → stores signed license
-- [ ] Edge: 24 h heartbeat task; refresh short-lived JWT
-- [ ] Edge: grace-period state machine (default 30 d) → degraded mode after expiry
-- [ ] integration test: activate → revoke → grace expiry → degraded mode
+- [x] Edge: hardware fingerprint module (Phase 0: hostname + primary MAC via blake3; CPU brand / motherboard serial / TPM EK / N-of-M match deferred to Phase 1 — see TOFIX)
+- [x] Edge: license file storage + signature verify on every start (`auth::CpPublicKey`, `license::load_and_verify`, atomic save)
+- [x] Edge: activate via CLI (`lbc-edge admin activate --license-key --branch-name [--cp-url]`) calls Control Plane and stores signed license. Interactive first-launch UX is Phase 1 work once UI is wired.
+- [ ] Edge: 24 h heartbeat task; refresh short-lived JWT — follow-up PR (also closes §0.8 heartbeat bullet on the CP side)
+- [ ] Edge: grace-period state machine (default 30 d) → degraded mode after expiry — depends on heartbeat tracking
+- [x] integration test: activate happy-path round-trip + signature verify (CP lib spun up on a random port; edge drives activation). Revoke → grace expiry → degraded mode lands with the heartbeat / state-machine PR.
 
 ### 0.10 Quality gates
 - [ ] `cargo fmt --check` clean

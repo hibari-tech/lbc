@@ -19,7 +19,10 @@ axum = { version = "0.8", features = ["macros"] }
 blake3 = "1"
 clap = { version = "4", features = ["derive", "env"] }
 figment = { version = "0.10", features = ["toml", "env"] }
+gethostname = "1"
 jsonwebtoken = { version = "9", default-features = false }
+mac_address = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
@@ -31,6 +34,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 utoipa = "5"
 
 [dev-dependencies]
+control-plane = { path = "../control-plane" }
 tempfile = "3"
 
 [lints]

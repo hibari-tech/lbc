@@ -2,12 +2,16 @@
 //!
 //! Phase 0 skeleton: tokio runtime + axum HTTP, structured logging, TOML+env
 //! config, graceful shutdown on SIGINT/SIGTERM, sqlx storage, content-addressed
-//! blob store, password hashing + JWTs, admin-seed CLI.
+//! blob store, password hashing + JWTs, admin-seed CLI, hardware fingerprint
+//! + license activation against the Control Plane.
 
+pub mod activate;
 pub mod admin;
 pub mod auth;
 pub mod cli;
+pub mod fingerprint;
 pub mod http;
+pub mod license;
 pub mod storage;
 
 mod config;
@@ -36,18 +40,46 @@ pub fn run() -> anyhow::Result<()> {
 
 async fn run_admin(cfg: Config, cmd: cli::AdminCommand) -> anyhow::Result<()> {
     let _log_guard = logging::init(&cfg.logging)?;
-    let db = storage::open(&cfg.database.path)
-        .await
-        .context("opening edge database")?;
     match cmd {
         cli::AdminCommand::Seed {
             email,
             password,
             role,
         } => {
+            let db = storage::open(&cfg.database.path)
+                .await
+                .context("opening edge database")?;
             let id = admin::seed_user(&db, &email, &password, role).await?;
             tracing::info!(id, email = %email, role = %role, "user seeded");
             println!("user seeded: id={id} email={email} role={role}");
+        }
+        cli::AdminCommand::Activate {
+            license_key,
+            branch_name,
+            cp_url,
+        } => {
+            let cp_url = cp_url.unwrap_or(cfg.auth.cp_url.clone());
+            let fp = fingerprint::compute();
+            let resp = activate::activate(&cp_url, &license_key, &branch_name, &fp)
+                .await
+                .context("activating against control plane")?;
+            license::save(&cfg.auth.license_path, &resp.license).with_context(|| {
+                format!("persisting license to {}", cfg.auth.license_path.display())
+            })?;
+            tracing::info!(
+                issued_id = resp.issued_license_id,
+                branch_id = resp.branch_id,
+                "license activated and persisted"
+            );
+            println!(
+                "activated: issued_license_id={} branch_id={} path={}",
+                resp.issued_license_id,
+                resp.branch_id,
+                cfg.auth.license_path.display()
+            );
+        }
+        cli::AdminCommand::Fingerprint => {
+            println!("{}", fingerprint::compute());
         }
     }
     Ok(())
@@ -60,6 +92,7 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
             "using the built-in dev JWT secret — set LBC_EDGE_AUTH__JWT_SECRET in production"
         );
     }
+    load_and_log_license(&cfg)?;
     let db = storage::open(&cfg.database.path)
         .await
         .context("opening edge database")?;
@@ -82,5 +115,34 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
         .await
         .context("axum::serve")?;
     tracing::info!("lbc-edge stopped");
+    Ok(())
+}
+
+fn load_and_log_license(cfg: &Config) -> anyhow::Result<()> {
+    if cfg.auth.cp_public_key.is_empty() {
+        tracing::warn!(
+            "no Control Plane public key configured — license verification disabled (set LBC_EDGE_AUTH__CP_PUBLIC_KEY in production)"
+        );
+        return Ok(());
+    }
+    let pubkey = auth::CpPublicKey::from_hex(&cfg.auth.cp_public_key)
+        .context("decoding LBC_EDGE_AUTH__CP_PUBLIC_KEY")?;
+    match license::load_and_verify(&cfg.auth.license_path, &pubkey)
+        .context("loading edge license")?
+    {
+        Some(loaded) => {
+            tracing::info!(
+                tier = ?loaded.payload.tier,
+                branch_id = loaded.payload.branch_id,
+                expires_at = loaded.payload.expiry,
+                grace_days = loaded.payload.grace_period_days,
+                "license loaded"
+            );
+        }
+        None => tracing::warn!(
+            path = %cfg.auth.license_path.display(),
+            "no license file present — run `lbc-edge admin activate` to bind this node"
+        ),
+    }
     Ok(())
 }
