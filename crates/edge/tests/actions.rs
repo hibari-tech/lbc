@@ -12,8 +12,18 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
-use edge::actions::{dispatch, ActionRequest, ActionResult};
+use edge::actions::{dispatch, ActionRequest, ActionResult, ActionsConfig};
 use edge::rules::{evaluate_event, RuleEngine};
+
+fn allow_private() -> ActionsConfig {
+    ActionsConfig {
+        allow_private_targets: true,
+    }
+}
+
+fn block_private() -> ActionsConfig {
+    ActionsConfig::default()
+}
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::Sha256;
@@ -123,7 +133,9 @@ async fn action_dispatch_persists_action_log_row() {
         headers: Default::default(),
         body: Some(json!({ "alert": "motion" })),
     };
-    let ActionResult { ok, status, .. } = dispatch(&app.db, rule_run_id, &action).await.unwrap();
+    let ActionResult { ok, status, .. } = dispatch(&app.db, &allow_private(), rule_run_id, &action)
+        .await
+        .unwrap();
     assert!(ok);
     assert_eq!(status, 200);
 
@@ -171,7 +183,9 @@ async fn action_dispatch_records_failure_for_5xx() {
         headers: Default::default(),
         body: Some(json!({})),
     };
-    let result = dispatch(&app.db, rule_run_id, &action).await.unwrap();
+    let result = dispatch(&app.db, &allow_private(), rule_run_id, &action)
+        .await
+        .unwrap();
     assert!(!result.ok);
     assert_eq!(result.status, 500);
     let status_str: String =
@@ -213,7 +227,9 @@ async fn action_dispatch_records_transport_error() {
         headers: Default::default(),
         body: None,
     };
-    let result = dispatch(&app.db, rule_run_id, &action).await.unwrap();
+    let result = dispatch(&app.db, &allow_private(), rule_run_id, &action)
+        .await
+        .unwrap();
     assert!(!result.ok);
     assert_eq!(result.status, 0);
     assert!(result.response.contains("transport error"));
@@ -244,7 +260,9 @@ async fn action_dispatch_unknown_kind_logs_error_row() {
         headers: Default::default(),
         body: None,
     };
-    let result = dispatch(&app.db, rule_run_id, &action).await.unwrap();
+    let result = dispatch(&app.db, &allow_private(), rule_run_id, &action)
+        .await
+        .unwrap();
     assert!(!result.ok);
     assert!(result.response.contains("unsupported"));
     let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
@@ -253,6 +271,122 @@ async fn action_dispatch_unknown_kind_logs_error_row() {
         .await
         .unwrap();
     assert_eq!(status, "error");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn action_dispatch_blocks_loopback_when_disallowed() {
+    let app = test_app().await;
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let action = ActionRequest {
+        kind: "http".into(),
+        target: "http://127.0.0.1:9/never".into(),
+        method: Some("POST".into()),
+        headers: Default::default(),
+        body: None,
+    };
+    let result = dispatch(&app.db, &block_private(), rule_run_id, &action)
+        .await
+        .unwrap();
+    assert!(!result.ok);
+    assert_eq!(result.status, 0);
+    assert!(
+        result.response.contains("blocked"),
+        "expected blocked response, got: {}",
+        result.response
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
+        .bind(rule_run_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(status, "error");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn action_dispatch_blocks_disallowed_scheme() {
+    let app = test_app().await;
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let action = ActionRequest {
+        kind: "http".into(),
+        target: "file:///etc/passwd".into(),
+        method: Some("GET".into()),
+        headers: Default::default(),
+        body: None,
+    };
+    let result = dispatch(&app.db, &block_private(), rule_run_id, &action)
+        .await
+        .unwrap();
+    assert!(!result.ok);
+    assert!(
+        result.response.contains("scheme") || result.response.contains("not allowed"),
+        "expected scheme rejection, got: {}",
+        result.response
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn action_dispatch_blocks_link_local_metadata_endpoint() {
+    let app = test_app().await;
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let action = ActionRequest {
+        kind: "http".into(),
+        // Cloud-metadata endpoint — covered by is_link_local on 169.254/16.
+        target: "http://169.254.169.254/latest/meta-data/".into(),
+        method: Some("GET".into()),
+        headers: Default::default(),
+        body: None,
+    };
+    let result = dispatch(&app.db, &block_private(), rule_run_id, &action)
+        .await
+        .unwrap();
+    assert!(!result.ok);
+    assert!(
+        result.response.contains("blocked"),
+        "expected blocked response, got: {}",
+        result.response
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -296,7 +430,9 @@ async fn rule_returning_actions_fires_them_via_dispatcher() {
     .unwrap();
 
     let engine = RuleEngine::new();
-    let report = evaluate_event(&app.db, &engine, 1, event_id).await.unwrap();
+    let report = evaluate_event(&app.db, &engine, &allow_private(), 1, event_id)
+        .await
+        .unwrap();
     assert_eq!(report.matched_rule_ids.len(), 1);
 
     let received = echo.state.received.lock().unwrap().clone();

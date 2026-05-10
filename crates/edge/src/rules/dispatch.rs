@@ -11,7 +11,7 @@ use anyhow::Context as _;
 use serde_json::Value;
 use sqlx::Row;
 
-use crate::actions::{self, ActionResult};
+use crate::actions::{self, ActionResult, ActionsConfig};
 use crate::storage::Db;
 
 use super::engine::{EventForRule, Outcome, RuleEngine};
@@ -25,6 +25,7 @@ pub struct EvaluationReport {
 pub async fn evaluate_event(
     db: &Db,
     engine: &RuleEngine,
+    actions_cfg: &ActionsConfig,
     branch_id: i64,
     event_id: i64,
 ) -> anyhow::Result<EvaluationReport> {
@@ -70,7 +71,7 @@ pub async fn evaluate_event(
                 .with_context(|| format!("persisting rule_run for rule {rule_id}"))?;
             matched.push(rule_id);
             for action in &outcome.actions {
-                match actions::dispatch(db, rule_run_id, action).await {
+                match actions::dispatch(db, actions_cfg, rule_run_id, action).await {
                     Ok(ActionResult {
                         ok: false,
                         response,
