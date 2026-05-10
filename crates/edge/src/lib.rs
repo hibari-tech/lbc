@@ -10,6 +10,7 @@ pub mod admin;
 pub mod auth;
 pub mod cli;
 pub mod fingerprint;
+pub mod heartbeat;
 pub mod http;
 pub mod license;
 pub mod storage;
@@ -66,6 +67,13 @@ async fn run_admin(cfg: Config, cmd: cli::AdminCommand) -> anyhow::Result<()> {
             license::save(&cfg.auth.license_path, &resp.license).with_context(|| {
                 format!("persisting license to {}", cfg.auth.license_path.display())
             })?;
+            let state_path = heartbeat::state_path_for(&cfg.auth.license_path);
+            let initial = heartbeat::LicenseHealthState {
+                last_seen_at: heartbeat::now_ms(),
+                issued_license_id: Some(resp.issued_license_id),
+            };
+            heartbeat::save_state(&state_path, &initial)
+                .context("persisting initial heartbeat state")?;
             tracing::info!(
                 issued_id = resp.issued_license_id,
                 branch_id = resp.branch_id,
@@ -92,13 +100,16 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
             "using the built-in dev JWT secret — set LBC_EDGE_AUTH__JWT_SECRET in production"
         );
     }
-    load_and_log_license(&cfg)?;
+    let loaded = load_and_log_license(&cfg)?;
     let db = storage::open(&cfg.database.path)
         .await
         .context("opening edge database")?;
     tracing::info!(path = %cfg.database.path.display(), "database ready");
     let _blobs = storage::blobs::BlobStore::open(&cfg.blobs.root).context("opening blob store")?;
     tracing::info!(root = %cfg.blobs.root.display(), "blob store ready");
+
+    let _heartbeat = start_heartbeat_if_configured(&cfg, loaded.as_ref())?;
+
     let session_ttl_secs = u64::try_from(cfg.auth.session_ttl_secs.max(0)).unwrap_or(0);
     let state = http::AppState {
         db,
@@ -118,12 +129,48 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_and_log_license(cfg: &Config) -> anyhow::Result<()> {
+fn start_heartbeat_if_configured(
+    cfg: &Config,
+    loaded: Option<&license::LoadedLicense>,
+) -> anyhow::Result<Option<tokio::task::JoinHandle<()>>> {
+    let Some(loaded) = loaded else {
+        return Ok(None);
+    };
+    let state_path = heartbeat::state_path_for(&cfg.auth.license_path);
+    let mut state = heartbeat::load_state(&state_path)?;
+    let Some(issued_id) = state.issued_license_id else {
+        tracing::warn!(
+            path = %state_path.display(),
+            "license present but no issued_license_id in state — skipping heartbeat"
+        );
+        return Ok(None);
+    };
+    if state.last_seen_at <= 0 {
+        state.last_seen_at = heartbeat::now_ms();
+    }
+    let handle = heartbeat::HealthHandle::new(state, loaded.payload.grace_period_days);
+    let interval = std::time::Duration::from_secs(cfg.auth.heartbeat_interval_secs.max(1));
+    tracing::info!(
+        interval_secs = cfg.auth.heartbeat_interval_secs,
+        grace_days = loaded.payload.grace_period_days,
+        "heartbeat task spawned"
+    );
+    Ok(Some(heartbeat::spawn(
+        cfg.auth.cp_url.clone(),
+        issued_id,
+        loaded.payload.hardware_fingerprint.clone(),
+        interval,
+        state_path,
+        handle,
+    )))
+}
+
+fn load_and_log_license(cfg: &Config) -> anyhow::Result<Option<license::LoadedLicense>> {
     if cfg.auth.cp_public_key.is_empty() {
         tracing::warn!(
             "no Control Plane public key configured — license verification disabled (set LBC_EDGE_AUTH__CP_PUBLIC_KEY in production)"
         );
-        return Ok(());
+        return Ok(None);
     }
     let pubkey = auth::CpPublicKey::from_hex(&cfg.auth.cp_public_key)
         .context("decoding LBC_EDGE_AUTH__CP_PUBLIC_KEY")?;
@@ -138,11 +185,14 @@ fn load_and_log_license(cfg: &Config) -> anyhow::Result<()> {
                 grace_days = loaded.payload.grace_period_days,
                 "license loaded"
             );
+            Ok(Some(loaded))
         }
-        None => tracing::warn!(
-            path = %cfg.auth.license_path.display(),
-            "no license file present — run `lbc-edge admin activate` to bind this node"
-        ),
+        None => {
+            tracing::warn!(
+                path = %cfg.auth.license_path.display(),
+                "no license file present — run `lbc-edge admin activate` to bind this node"
+            );
+            Ok(None)
+        }
     }
-    Ok(())
 }

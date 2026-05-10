@@ -185,6 +185,68 @@ async fn upsert_branch(
     Ok(id)
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HeartbeatRequest {
+    /// The same fingerprint the edge presented at activation time. Mismatch
+    /// returns 401 — the license cannot be relayed to a different machine
+    /// and still heartbeat.
+    pub hardware_fingerprint: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HeartbeatResponse {
+    /// Server-recorded `last_seen` in unix epoch milliseconds.
+    pub last_seen: i64,
+    /// Echoes the issued license's `expires_at` for client convenience.
+    pub expires_at: i64,
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/licenses/{id}/heartbeat", tag = "licenses",
+    params(("id" = i64, Path)),
+    request_body = HeartbeatRequest,
+    responses(
+        (status = 200, body = HeartbeatResponse),
+        (status = 401, description = "Fingerprint mismatch"),
+        (status = 404, description = "Unknown id"),
+        (status = 410, description = "License revoked"),
+    ),
+)]
+pub async fn heartbeat(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<HeartbeatRequest>,
+) -> Result<Json<HeartbeatResponse>, ApiError> {
+    let row =
+        sqlx::query("SELECT payload, expires_at, revoked_at FROM issued_license WHERE id = ?")
+            .bind(id)
+            .fetch_optional(state.db.pool())
+            .await?
+            .ok_or(ApiError::NotFound)?;
+    let revoked_at: Option<i64> = row.get("revoked_at");
+    if revoked_at.is_some() {
+        return Err(ApiError::Gone("license revoked".into()));
+    }
+    let payload_text: String = row.get("payload");
+    let payload: LicensePayload = serde_json::from_str(&payload_text)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("decoding stored payload: {e}")))?;
+    if payload.hardware_fingerprint != req.hardware_fingerprint {
+        return Err(ApiError::BadRequest("fingerprint mismatch".into()));
+    }
+    let expires_at: i64 = row.get("expires_at");
+    let now_ms = now_secs() * 1000;
+    sqlx::query("UPDATE issued_license SET last_seen = ? WHERE id = ?")
+        .bind(now_ms)
+        .bind(id)
+        .execute(state.db.pool())
+        .await?;
+    Ok(Json(HeartbeatResponse {
+        last_seen: now_ms,
+        expires_at,
+    }))
+}
+
 #[utoipa::path(
     post, path = "/api/v1/licenses/{id}/revoke", tag = "licenses",
     params(("id" = i64, Path)),

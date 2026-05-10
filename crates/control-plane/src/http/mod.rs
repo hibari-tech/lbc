@@ -24,6 +24,7 @@ pub fn router(state: AppState) -> Router {
         .route("/version", get(meta::version))
         .route("/openapi.json", get(meta::openapi_json))
         .route("/licenses/activate", post(licenses::activate))
+        .route("/licenses/{id}/heartbeat", post(licenses::heartbeat))
         .route("/licenses/{id}/revoke", post(licenses::revoke));
 
     Router::<AppState>::new()

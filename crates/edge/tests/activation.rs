@@ -180,3 +180,124 @@ fn cp_public_key_round_trips_hex() {
 fn cp_public_key_rejects_wrong_length() {
     assert!(CpPublicKey::from_hex("abcd").is_err());
 }
+
+// --- Heartbeat / grace-period --------------------------------------------
+
+use edge::heartbeat::{compute_status, HealthHandle, LicenseHealthState, LicenseStatus};
+
+#[test]
+fn compute_status_is_healthy_within_grace() {
+    let day_ms: i64 = 86_400_000;
+    let now = 100 * day_ms;
+    // Last seen 5 days ago, 30-day grace.
+    assert_eq!(
+        compute_status(now - 5 * day_ms, now, 30),
+        LicenseStatus::Healthy
+    );
+}
+
+#[test]
+fn compute_status_degrades_after_grace() {
+    let day_ms: i64 = 86_400_000;
+    let now = 100 * day_ms;
+    // Last seen 31 days ago, 30-day grace.
+    assert_eq!(
+        compute_status(now - 31 * day_ms, now, 30),
+        LicenseStatus::Degraded
+    );
+}
+
+#[test]
+fn compute_status_with_zero_last_seen_is_degraded() {
+    assert_eq!(compute_status(0, 1_000_000, 30), LicenseStatus::Degraded);
+}
+
+#[test]
+fn compute_status_with_zero_grace_degrades_immediately() {
+    let now = 1_000_000_i64;
+    assert_eq!(compute_status(now - 1, now, 0), LicenseStatus::Degraded);
+}
+
+#[test]
+fn license_health_state_round_trips_through_disk() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("state.json");
+    let original = LicenseHealthState {
+        last_seen_at: 1_234_567_890,
+        issued_license_id: Some(42),
+    };
+    edge::heartbeat::save_state(&path, &original).unwrap();
+    let loaded = edge::heartbeat::load_state(&path).unwrap();
+    assert_eq!(loaded.last_seen_at, original.last_seen_at);
+    assert_eq!(loaded.issued_license_id, original.issued_license_id);
+}
+
+#[test]
+fn license_health_state_load_missing_returns_default() {
+    let tmp = TempDir::new().unwrap();
+    let s = edge::heartbeat::load_state(&tmp.path().join("nope.json")).unwrap();
+    assert_eq!(s.last_seen_at, 0);
+    assert!(s.issued_license_id.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn end_to_end_heartbeat_then_revoke_then_degraded() {
+    let (cp, db) = spawn_cp().await;
+    seed_license_key(&db, "TEST-HB-KEY", 1).await;
+    let cp_url = format!("http://{}", cp.addr);
+    for _ in 0..20 {
+        if reqwest::get(format!("{cp_url}/healthz")).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let fp = edge::fingerprint::compute();
+
+    // Activate.
+    let resp = edge::activate::activate(&cp_url, "TEST-HB-KEY", "store-1", &fp)
+        .await
+        .expect("activate");
+    let issued_id = resp.issued_license_id;
+
+    // Drive a single heartbeat directly (rather than spawning the periodic
+    // task) so the test stays deterministic.
+    let hb = edge::heartbeat::post_heartbeat(&cp_url, issued_id, &fp)
+        .await
+        .expect("first heartbeat");
+    assert!(hb.last_seen > 0);
+
+    // Health handle starts healthy after a successful heartbeat.
+    let handle = HealthHandle::new(
+        LicenseHealthState {
+            last_seen_at: hb.last_seen,
+            issued_license_id: Some(issued_id),
+        },
+        30,
+    );
+    assert_eq!(handle.status().await, LicenseStatus::Healthy);
+
+    // Revoke over the wire; subsequent heartbeats should fail with a Gone-style error.
+    let revoke = reqwest::Client::new()
+        .post(format!("{cp_url}/api/v1/licenses/{issued_id}/revoke"))
+        .send()
+        .await
+        .expect("revoke");
+    assert_eq!(revoke.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let post_revoke = edge::heartbeat::post_heartbeat(&cp_url, issued_id, &fp).await;
+    assert!(
+        post_revoke.is_err(),
+        "heartbeat after revoke must fail; got {:?}",
+        post_revoke
+    );
+
+    // Simulate the grace window expiring without further heartbeats by
+    // checking compute_status with last_seen well in the past.
+    let day_ms: i64 = 86_400_000;
+    let stale_now = hb.last_seen + 31 * day_ms;
+    assert_eq!(
+        compute_status(hb.last_seen, stale_now, 30),
+        LicenseStatus::Degraded,
+        "after 31d without heartbeat, license should be degraded"
+    );
+}
