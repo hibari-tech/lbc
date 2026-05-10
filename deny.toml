@@ -5,6 +5,9 @@ yanked = "deny"
 [licenses]
 version = 2
 confidence-threshold = 0.93
+# Workspace crates use the proprietary LBC license, which is not a valid
+# SPDX expression. Skip license checks for our own private packages.
+private = { ignore = true }
 allow = [
     "MIT",
     "Apache-2.0",
@@ -22,6 +25,9 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace-internal `path = ...` deps without a version look like wildcards
+# to cargo-deny. Allow them so we don't have to version-pin every internal crate.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

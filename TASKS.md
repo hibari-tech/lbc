@@ -17,11 +17,11 @@ Active phase: **Phase 0 — Foundations**.
 - [x] `LICENSE` (proprietary placeholder; flagged for legal sign-off)
 
 ### 0.2 CI
-- [ ] GH Actions: fmt + clippy + test on `{ubuntu, windows, macos}`
-- [ ] matrix add `aarch64` via `cross` (Linux) and native runners (mac arm64)
-- [ ] `cargo-audit` + `cargo-deny` jobs
-- [ ] cache `~/.cargo` and `target/`
-- [ ] release workflow scaffold (`cargo-dist`)
+- [x] GH Actions: fmt + clippy + test on `{ubuntu, windows, macos}` (`macos-latest` is arm64 → covers mac aarch64)
+- [ ] matrix add Linux `aarch64` via `cross`
+- [x] `cargo-audit` + `cargo-deny` jobs
+- [x] cache `~/.cargo` and `target/` (`Swatinem/rust-cache@v2`)
+- [x] release workflow scaffold (manual `workflow_dispatch` + tag trigger; `cargo dist init` deferred to first tagged release)
 
 ### 0.3 Edge — runtime skeleton
 - [ ] add `tokio`, `axum`, `tower`, `tracing`, `tracing-subscriber`, `anyhow`
