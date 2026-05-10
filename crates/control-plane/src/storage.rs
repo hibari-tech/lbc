@@ -19,11 +19,18 @@ struct EmbeddedMigration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[EmbeddedMigration] = &[EmbeddedMigration {
-    version: 20_260_510_140_000,
-    description: "initial schema",
-    sql: include_str!("../migrations/20260510140000_initial_schema.sql"),
-}];
+const MIGRATIONS: &[EmbeddedMigration] = &[
+    EmbeddedMigration {
+        version: 20_260_510_140_000,
+        description: "initial schema",
+        sql: include_str!("../migrations/20260510140000_initial_schema.sql"),
+    },
+    EmbeddedMigration {
+        version: 20_260_510_150_000,
+        description: "heartbeat last_seen column",
+        sql: include_str!("../migrations/20260510150000_heartbeat.sql"),
+    },
+];
 
 #[derive(Clone)]
 pub struct Db {

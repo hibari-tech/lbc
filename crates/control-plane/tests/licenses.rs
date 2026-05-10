@@ -240,6 +240,116 @@ async fn healthz_returns_ok() {
     assert_eq!(body_json(resp).await["status"], "ok");
 }
 
+async fn activate(app: &common::TestApp, key: &str, branch: &str, fp: &str) -> i64 {
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            "/api/v1/licenses/activate",
+            json!({
+                "license_key": key,
+                "branch_name": branch,
+                "hardware_fingerprint": fp,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    body_json(resp).await["issued_license_id"].as_i64().unwrap()
+}
+
+#[tokio::test]
+async fn heartbeat_updates_last_seen() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "hb", "pro", 1).await;
+    let id = activate(&app, &key, "store", "FP-001").await;
+
+    let before: Option<i64> =
+        sqlx::query_scalar("SELECT last_seen FROM issued_license WHERE id = ?")
+            .bind(id)
+            .fetch_one(app.db.pool())
+            .await
+            .unwrap();
+    assert!(before.is_none());
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({"hardware_fingerprint":"FP-001"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert!(body["last_seen"].as_i64().unwrap() > 0);
+
+    let after: i64 = sqlx::query_scalar("SELECT last_seen FROM issued_license WHERE id = ?")
+        .bind(id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(after, body["last_seen"].as_i64().unwrap());
+}
+
+#[tokio::test]
+async fn heartbeat_rejects_fingerprint_mismatch() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "hb-mis", "pro", 1).await;
+    let id = activate(&app, &key, "store", "ORIG-FP").await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({"hardware_fingerprint":"OTHER-FP"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn heartbeat_after_revoke_returns_410() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "hb-rev", "pro", 1).await;
+    let id = activate(&app, &key, "store", "FP").await;
+    let revoke = app
+        .router
+        .clone()
+        .oneshot(post(&format!("/api/v1/licenses/{id}/revoke"), Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(revoke.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({"hardware_fingerprint":"FP"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn heartbeat_unknown_id_returns_404() {
+    let app = test_app().await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            "/api/v1/licenses/9999/heartbeat",
+            json!({"hardware_fingerprint":"X"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn openapi_lists_license_paths() {
     let app = test_app().await;
@@ -257,5 +367,6 @@ async fn openapi_lists_license_paths() {
     let json = body_json(resp).await;
     let paths = json["paths"].as_object().unwrap();
     assert!(paths.contains_key("/api/v1/licenses/activate"));
+    assert!(paths.contains_key("/api/v1/licenses/{id}/heartbeat"));
     assert!(paths.contains_key("/api/v1/licenses/{id}/revoke"));
 }

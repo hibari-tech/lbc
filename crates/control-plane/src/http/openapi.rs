@@ -2,7 +2,7 @@
 
 use utoipa::OpenApi;
 
-use super::licenses::{ActivateRequest, ActivateResponse};
+use super::licenses::{ActivateRequest, ActivateResponse, HeartbeatRequest, HeartbeatResponse};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -11,7 +11,11 @@ use super::licenses::{ActivateRequest, ActivateResponse};
         version = "0.1.0",
         description = "Cloud-side licensing and fleet API. Phase 0 surface."
     ),
-    paths(super::licenses::activate, super::licenses::revoke),
-    components(schemas(ActivateRequest, ActivateResponse))
+    paths(
+        super::licenses::activate,
+        super::licenses::heartbeat,
+        super::licenses::revoke,
+    ),
+    components(schemas(ActivateRequest, ActivateResponse, HeartbeatRequest, HeartbeatResponse))
 )]
 pub struct ApiDoc;

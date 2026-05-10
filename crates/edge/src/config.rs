@@ -48,6 +48,9 @@ pub struct AuthConfig {
     pub cp_public_key: String,
     /// On-disk path where the signed license is persisted after activation.
     pub license_path: PathBuf,
+    /// Interval between heartbeats to the Control Plane, in seconds.
+    /// Defaults to 24 h. Override for tests or aggressive fleet tracking.
+    pub heartbeat_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +88,7 @@ impl Default for Config {
                 cp_url: "http://127.0.0.1:7979".into(),
                 cp_public_key: String::new(),
                 license_path: PathBuf::from("lbc-edge.license.json"),
+                heartbeat_interval_secs: 24 * 60 * 60,
             },
         }
     }

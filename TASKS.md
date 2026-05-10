@@ -62,16 +62,16 @@ Active phase: **Phase 0 — Foundations**.
 - [x] entities: `account`, `branch`, `license_key`, `issued_license` (heartbeat lands in PR B)
 - [x] license issuance API (`POST /api/v1/licenses/activate` — verifies key hash, enforces branch-count cap, ed25519-signs payload, persists `issued_license`)
 - [x] license revocation API (`POST /api/v1/licenses/{id}/revoke`, idempotent)
-- [ ] heartbeat API (auth via JWT) — PR B
-- [ ] minimal admin web (list accounts, branches, licenses) — PR B
+- [x] heartbeat API (`POST /api/v1/licenses/{id}/heartbeat` — verifies fingerprint, refuses revoked, updates `last_seen`). Token-based auth (signed-license JWT) deferred to Phase 1; Phase 0 uses fingerprint match as the credential.
+- [ ] minimal admin web (list accounts, branches, licenses) — separate small PR
 
 ### 0.9 Activation flow (E2E)
 - [x] Edge: hardware fingerprint module (Phase 0: hostname + primary MAC via blake3; CPU brand / motherboard serial / TPM EK / N-of-M match deferred to Phase 1 — see TOFIX)
 - [x] Edge: license file storage + signature verify on every start (`auth::CpPublicKey`, `license::load_and_verify`, atomic save)
 - [x] Edge: activate via CLI (`lbc-edge admin activate --license-key --branch-name [--cp-url]`) calls Control Plane and stores signed license. Interactive first-launch UX is Phase 1 work once UI is wired.
-- [ ] Edge: 24 h heartbeat task; refresh short-lived JWT — follow-up PR (also closes §0.8 heartbeat bullet on the CP side)
-- [ ] Edge: grace-period state machine (default 30 d) → degraded mode after expiry — depends on heartbeat tracking
-- [x] integration test: activate happy-path round-trip + signature verify (CP lib spun up on a random port; edge drives activation). Revoke → grace expiry → degraded mode lands with the heartbeat / state-machine PR.
+- [x] Edge: 24 h heartbeat task (`heartbeat::spawn`, `interval_secs` configurable). Short-lived JWT refresh deferred to Phase 1 (heartbeat is currently fingerprint-authenticated).
+- [x] Edge: grace-period state machine — `compute_status(last_seen_ms, now_ms, grace_period_days)` pure function + persistent `LicenseHealthState`. `Healthy` within grace, `Degraded` once stale.
+- [x] integration test: activate → heartbeat → revoke → grace expiry → degraded (CP spun up via lib on a random port; edge drives activate + heartbeat over the wire; grace transition validated via the pure `compute_status` with simulated time).
 
 ### 0.10 Quality gates
 - [ ] `cargo fmt --check` clean
