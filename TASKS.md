@@ -31,9 +31,9 @@ Active phase: **Phase 0 — Foundations**.
 - [x] graceful shutdown on SIGINT (all platforms) and SIGTERM (unix)
 
 ### 0.4 Edge — storage
-- [ ] add `sqlx` + SQLite (WAL); embedded migrations dir
-- [ ] schema v1: `branch`, `device`, `event`, `rule`, `rule_run`, `action_log`, `exception`, `case`, `evidence`, `user`, `audit_log`, `license`
-- [ ] hash-chained `audit_log` insert helper
+- [x] add `sqlx` + SQLite (WAL); embedded migrations dir
+- [x] schema v1: `branch`, `device`, `event`, `rule`, `rule_run`, `action_log`, `exception`, `case` (+ `case_exception` link table), `evidence`, `user`, `audit_log`, `license`
+- [x] hash-chained `audit_log` insert helper (`Db::audit_append`) + chain verifier (`Db::audit_verify_chain`)
 - [ ] content-addressed blob store on filesystem (`blake3`)
 
 ### 0.5 Edge — auth + RBAC

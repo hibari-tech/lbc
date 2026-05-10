@@ -16,6 +16,12 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub server: ServerConfig,
     pub logging: LoggingConfig,
+    pub database: DatabaseConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +46,9 @@ impl Default for Config {
                 level: "info".into(),
                 json: false,
                 file: None,
+            },
+            database: DatabaseConfig {
+                path: PathBuf::from("lbc-edge.db"),
             },
         }
     }
