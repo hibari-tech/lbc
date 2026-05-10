@@ -58,12 +58,12 @@ Active phase: **Phase 0 — Foundations**.
 - [ ] i18n resource layout (English only at v1)
 
 ### 0.8 Control Plane — skeleton
-- [ ] axum service; Postgres via `sqlx`
-- [ ] entities: `account`, `branch`, `license_key`, `issued_license`, `heartbeat`
-- [ ] license issuance API: accept fingerprint + key → return ed25519-signed license JSON
-- [ ] license revocation API
-- [ ] heartbeat API (auth via JWT)
-- [ ] minimal admin web (list accounts, branches, licenses)
+- [x] axum service; sqlx + SQLite for Phase 0 (Postgres swap is a TOFIX entry — see REFLECT/TOFIX, deployable in Phase 3)
+- [x] entities: `account`, `branch`, `license_key`, `issued_license` (heartbeat lands in PR B)
+- [x] license issuance API (`POST /api/v1/licenses/activate` — verifies key hash, enforces branch-count cap, ed25519-signs payload, persists `issued_license`)
+- [x] license revocation API (`POST /api/v1/licenses/{id}/revoke`, idempotent)
+- [ ] heartbeat API (auth via JWT) — PR B
+- [ ] minimal admin web (list accounts, branches, licenses) — PR B
 
 ### 0.9 Activation flow (E2E)
 - [ ] Edge: hardware fingerprint module (CPU, MAC, board serial, TPM EK, OS install ID; N-of-M match)

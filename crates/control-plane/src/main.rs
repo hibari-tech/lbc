@@ -1,5 +1,5 @@
-//! LBC Control Plane entrypoint. Phase 0 stub.
+//! LBC Control Plane binary entrypoint.
 
-fn main() {
-    println!("lbc-control-plane {} (stub)", env!("CARGO_PKG_VERSION"));
+fn main() -> anyhow::Result<()> {
+    control_plane::run()
 }
