@@ -15,6 +15,15 @@ once we tag a `v1.0.0`.
   Persists to `event` table; uses payload's `kind` field if present,
   else `"webhook"`. Spec `lbcspec.md` §4.1 first bullet, §5.4 replay
   protection.
+- **Action layer (HTTP)** — rules can return a map with an `actions`
+  array of action descriptors `{ kind, target, method, headers, body }`.
+  Each is dispatched after the matching `rule_run` is persisted. Phase 1
+  ships only `kind = "http"` (POST/GET/etc via `reqwest`, 15 s timeout,
+  responses truncated to 16 KiB); SMTP / FTP / MQTT / Modbus / Nx Witness
+  share the same shape and land as follow-up modules. Every dispatch
+  attempt — success, 5xx, or transport failure — is persisted to the
+  `action_log` table linked to the originating `rule_run`. Closes the
+  webhook → rule → action → audit-log loop end-to-end.
 - **Rule engine MVP** (Rhai sandbox) — `edge::rules::RuleEngine`
   compiles and evaluates user scripts against incoming events. Rules
   whose `definition` JSON has a top-level `script` string are

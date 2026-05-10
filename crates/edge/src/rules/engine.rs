@@ -10,17 +10,38 @@
 //! event.kind == "motion" && event.payload.zone == "front-door"
 //! ```
 //!
-//! The script's return value is interpreted as the rule's match
-//! decision: a truthy `bool` (or non-empty/non-zero map / array)
-//! counts as a match. Phase 1 ignores any returned action descriptor;
-//! the action layer lands in a follow-up PR.
+//! The script's return value drives the [`Outcome`]:
+//!
+//! * **bool / int / string / array / map (truthy)** — `matched = true`,
+//!   no actions queued.
+//! * **map with an `actions` array** — `matched = true` (or whatever
+//!   the map's `matched` field says), actions are deserialised into
+//!   [`ActionRequest`] descriptors and queued for the action layer.
+//!
+//! ```rhai
+//! if event.kind == "motion" {
+//!     return #{
+//!         actions: [
+//!             #{
+//!                 kind: "http",
+//!                 target: "https://hooks.example.com/notify",
+//!                 method: "POST",
+//!                 body: #{ alert: "motion detected" },
+//!             }
+//!         ]
+//!     };
+//! }
+//! return false;
+//! ```
 
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use rhai::{Engine, Map, Scope, AST};
-use serde::Serialize;
+use rhai::{Dynamic, Engine, Map, Scope, AST};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::actions::ActionRequest;
 
 #[derive(Debug, Clone)]
 pub struct Script {
@@ -29,9 +50,11 @@ pub struct Script {
     pub rule_id: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Outcome {
     pub matched: bool,
+    #[serde(default)]
+    pub actions: Vec<ActionRequest>,
 }
 
 /// Cloneable handle around a sandboxed Rhai engine. The inner `Engine`
@@ -74,11 +97,9 @@ impl RuleEngine {
         scope.push_constant("event", event_map);
         let result = self
             .rhai
-            .eval_ast_with_scope::<rhai::Dynamic>(&mut scope, &script.ast)
+            .eval_ast_with_scope::<Dynamic>(&mut scope, &script.ast)
             .with_context(|| format!("evaluating rule {}", script.rule_id))?;
-        Ok(Outcome {
-            matched: dynamic_to_bool(&result),
-        })
+        parse_outcome(result, script.rule_id)
     }
 }
 
@@ -99,21 +120,56 @@ pub struct EventForRule {
     pub payload: Value,
 }
 
-fn dynamic_to_bool(v: &rhai::Dynamic) -> bool {
+fn parse_outcome(v: Dynamic, rule_id: i64) -> anyhow::Result<Outcome> {
     if let Ok(b) = v.as_bool() {
-        return b;
+        return Ok(Outcome {
+            matched: b,
+            actions: vec![],
+        });
     }
     if let Ok(i) = v.as_int() {
-        return i != 0;
+        return Ok(Outcome {
+            matched: i != 0,
+            actions: vec![],
+        });
     }
     if let Some(s) = v.clone().try_cast::<String>() {
-        return !s.is_empty();
+        return Ok(Outcome {
+            matched: !s.is_empty(),
+            actions: vec![],
+        });
     }
     if let Some(arr) = v.clone().try_cast::<rhai::Array>() {
-        return !arr.is_empty();
+        return Ok(Outcome {
+            matched: !arr.is_empty(),
+            actions: vec![],
+        });
     }
-    if let Some(map) = v.clone().try_cast::<rhai::Map>() {
-        return !map.is_empty();
+    if let Some(map) = v.clone().try_cast::<Map>() {
+        // Default match decision: a returned map is truthy when non-empty
+        // unless the script explicitly sets `matched`.
+        let matched = match map.get("matched") {
+            Some(d) => d.as_bool().unwrap_or(true),
+            None => !map.is_empty(),
+        };
+        let actions = match map.get("actions") {
+            Some(d) => parse_actions(d.clone(), rule_id)?,
+            None => vec![],
+        };
+        return Ok(Outcome { matched, actions });
     }
-    false
+    Ok(Outcome::default())
+}
+
+fn parse_actions(d: Dynamic, rule_id: i64) -> anyhow::Result<Vec<ActionRequest>> {
+    let arr = d.try_cast::<rhai::Array>().ok_or_else(|| {
+        anyhow::anyhow!("rule {rule_id}: `actions` must be an array of action descriptors")
+    })?;
+    let mut out = Vec::with_capacity(arr.len());
+    for (idx, elt) in arr.into_iter().enumerate() {
+        let action: ActionRequest = rhai::serde::from_dynamic(&elt)
+            .with_context(|| format!("rule {rule_id}: parsing action at index {idx}"))?;
+        out.push(action);
+    }
+    Ok(out)
 }

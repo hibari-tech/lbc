@@ -43,7 +43,7 @@ fn engine_evaluates_simple_match() {
         .compile(1, r#"event.kind == "motion""#)
         .expect("compile");
     let evt = fixture_event("motion", json!({}));
-    let Outcome { matched } = engine.evaluate(&script, &evt).expect("eval");
+    let Outcome { matched, .. } = engine.evaluate(&script, &evt).expect("eval");
     assert!(matched);
 }
 
@@ -54,7 +54,7 @@ fn engine_evaluates_no_match_returns_false() {
         .compile(2, r#"event.kind == "tamper""#)
         .expect("compile");
     let evt = fixture_event("motion", json!({}));
-    let Outcome { matched } = engine.evaluate(&script, &evt).expect("eval");
+    let Outcome { matched, .. } = engine.evaluate(&script, &evt).expect("eval");
     assert!(!matched);
 }
 
