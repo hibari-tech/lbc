@@ -15,6 +15,18 @@ once we tag a `v1.0.0`.
   Persists to `event` table; uses payload's `kind` field if present,
   else `"webhook"`. Spec `lbcspec.md` §4.1 first bullet, §5.4 replay
   protection.
+- **Rule AST cache + per-rule throttle** — `RuleEngine` now caches
+  compiled scripts keyed by `(rule_id, version)`. Subsequent evaluations
+  of an unchanged rule reuse the AST instead of recompiling per event;
+  bumping `rule.version` (e.g. via `PATCH /rules/{id}`) invalidates the
+  entry. New `RuleEngine::compiles_observed()` returns the lifetime
+  compile count for tests / metrics.
+  Rule definitions can also carry `throttle_secs: <i64>`; if set and
+  positive, subsequent matches on the same rule are silently suppressed
+  until the window has elapsed since the last fire. Suppressed events
+  do not produce a `rule_run` row. Spec `lbcspec.md` §4.2 time
+  primitives — first slice (debounce / hold-for / cron schedules
+  follow the same in-engine pattern in later PRs).
 - **HTTP action SSRF guard** — outbound HTTP actions now verify the
   target before the request is sent. Scheme is restricted to
   `http`/`https` (no `file://` etc.); the host (literal or resolved)
