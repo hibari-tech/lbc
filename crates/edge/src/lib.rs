@@ -1,8 +1,12 @@
 //! LBC Edge Node library.
 //!
 //! Phase 0 skeleton: tokio runtime + axum HTTP, structured logging, TOML+env
-//! config, graceful shutdown on SIGINT/SIGTERM.
+//! config, graceful shutdown on SIGINT/SIGTERM, sqlx storage, content-addressed
+//! blob store, password hashing + JWTs, admin-seed CLI.
 
+pub mod admin;
+pub mod auth;
+pub mod cli;
 pub mod http;
 pub mod storage;
 
@@ -11,20 +15,51 @@ mod logging;
 mod shutdown;
 
 use anyhow::Context as _;
+use clap::Parser as _;
 
 pub use config::Config;
 
+const DEFAULT_DEV_JWT_SECRET: &str = "INSECURE_DEV_SECRET_CHANGE_ME";
+
 pub fn run() -> anyhow::Result<()> {
+    let cli = cli::Cli::parse();
     let cfg = Config::load()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("building tokio runtime")?;
-    runtime.block_on(serve(cfg))
+    match cli.command.unwrap_or(cli::Command::Run) {
+        cli::Command::Run => runtime.block_on(serve(cfg)),
+        cli::Command::Admin { cmd } => runtime.block_on(run_admin(cfg, cmd)),
+    }
+}
+
+async fn run_admin(cfg: Config, cmd: cli::AdminCommand) -> anyhow::Result<()> {
+    let _log_guard = logging::init(&cfg.logging)?;
+    let db = storage::open(&cfg.database.path)
+        .await
+        .context("opening edge database")?;
+    match cmd {
+        cli::AdminCommand::Seed {
+            email,
+            password,
+            role,
+        } => {
+            let id = admin::seed_user(&db, &email, &password, role).await?;
+            tracing::info!(id, email = %email, role = %role, "user seeded");
+            println!("user seeded: id={id} email={email} role={role}");
+        }
+    }
+    Ok(())
 }
 
 async fn serve(cfg: Config) -> anyhow::Result<()> {
     let _log_guard = logging::init(&cfg.logging)?;
+    if cfg.auth.jwt_secret == DEFAULT_DEV_JWT_SECRET {
+        tracing::warn!(
+            "using the built-in dev JWT secret — set LBC_EDGE_AUTH__JWT_SECRET in production"
+        );
+    }
     let _db = storage::open(&cfg.database.path)
         .await
         .context("opening edge database")?;
