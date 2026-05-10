@@ -2,4 +2,4 @@
 //!
 //! Phase 0 stub. See PLAN.md §A and TASKS.md.
 
-pub const CRATE_NAME: &str = "shared";
+pub mod license;
