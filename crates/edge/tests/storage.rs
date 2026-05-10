@@ -15,8 +15,7 @@ async fn fresh_db() -> (TempDir, edge::storage::Db) {
 async fn migrations_create_all_phase0_tables() {
     let (_tmp, db) = fresh_db().await;
     let rows = sqlx::query(
-        "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' \
-         AND name NOT LIKE '_sqlx_%'",
+        "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     )
     .fetch_all(db.pool())
     .await
@@ -24,6 +23,7 @@ async fn migrations_create_all_phase0_tables() {
     let mut names: Vec<String> = rows
         .into_iter()
         .map(|r| r.try_get::<String, _>("name").expect("name column"))
+        .filter(|n| !n.starts_with('_'))
         .collect();
     names.sort();
     let expected = [
@@ -43,6 +43,19 @@ async fn migrations_create_all_phase0_tables() {
     ];
     let expected: Vec<String> = expected.iter().map(|s| (*s).to_string()).collect();
     assert_eq!(names, expected, "phase 0 table set");
+}
+
+#[tokio::test]
+async fn migrations_are_idempotent_across_reopen() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = tmp.path().join("test.db");
+    let _first = edge::storage::open(&path).await.expect("first open");
+    let second = edge::storage::open(&path).await.expect("second open");
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _migrations")
+        .fetch_one(second.pool())
+        .await
+        .expect("count migrations");
+    assert_eq!(rows, 1, "initial migration recorded exactly once");
 }
 
 #[tokio::test]

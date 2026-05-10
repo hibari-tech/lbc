@@ -47,6 +47,11 @@ jobs:
         run: cargo test --workspace --all-targets --locked
 
   deny:
+    # cargo-deny covers the same RustSec advisory database as cargo-audit
+    # plus license/bans/sources, and — unlike cargo-audit — performs proper
+    # feature resolution. It correctly skips advisories on optional
+    # dependencies that aren't actually compiled (e.g. sqlx-mysql when only
+    # the `sqlite` feature is enabled).
     name: cargo-deny
     runs-on: ubuntu-latest
     steps:
@@ -54,12 +59,3 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-
-  audit:
-    name: cargo-audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}

@@ -19,7 +19,7 @@ Active phase: **Phase 0 — Foundations**.
 ### 0.2 CI
 - [x] GH Actions: fmt + clippy + test on `{ubuntu, windows, macos}` (`macos-latest` is arm64 → covers mac aarch64)
 - [ ] matrix add Linux `aarch64` via `cross`
-- [x] `cargo-audit` + `cargo-deny` jobs
+- [x] advisory + license + bans + sources gate via `cargo-deny` (replaces a separate `cargo-audit` job; deny is feature-aware so it doesn't false-positive on disabled optional deps)
 - [x] cache `~/.cargo` and `target/` (`Swatinem/rust-cache@v2`)
 - [x] release workflow scaffold (manual `workflow_dispatch` + tag trigger; `cargo dist init` deferred to first tagged release)
 
@@ -34,7 +34,7 @@ Active phase: **Phase 0 — Foundations**.
 - [x] add `sqlx` + SQLite (WAL); embedded migrations dir
 - [x] schema v1: `branch`, `device`, `event`, `rule`, `rule_run`, `action_log`, `exception`, `case` (+ `case_exception` link table), `evidence`, `user`, `audit_log`, `license`
 - [x] hash-chained `audit_log` insert helper (`Db::audit_append`) + chain verifier (`Db::audit_verify_chain`)
-- [ ] content-addressed blob store on filesystem (`blake3`)
+- [x] content-addressed blob store on filesystem (`blake3`) — `BlobStore::open/put/get/exists/path_for`, sharded `<root>/<aa>/<bb>/<hex64>` layout, atomic tmp+rename writes
 
 ### 0.5 Edge — auth + RBAC
 - [ ] argon2 password hashing
