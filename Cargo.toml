@@ -17,3 +17,10 @@ repository = "https://github.com/hibari-tech/lbc"
 
 [workspace.dependencies]
 shared = { path = "crates/shared" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

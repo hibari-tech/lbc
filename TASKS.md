@@ -12,9 +12,9 @@ Active phase: **Phase 0 — Foundations**.
 - [x] cargo workspace skeleton (`shared`, `edge`, `control-plane`, `ui`, `cli`)
 - [x] `.gitignore`, `rust-toolchain.toml` (stable + rustfmt + clippy)
 - [x] tracking docs (`PLAN.md`, `TASKS.md`, `TOFIX.md`, `REFLECT.md`)
-- [ ] `rustfmt.toml`, `clippy.toml` (workspace lints)
-- [ ] `deny.toml` for `cargo-deny`
-- [ ] `LICENSE` text (proprietary placeholder until legal sign-off)
+- [x] `rustfmt.toml` + workspace lints in root `Cargo.toml` (clippy `all=warn`, `unsafe_code=forbid`)
+- [x] `deny.toml` for `cargo-deny` (license allowlist + advisories + bans)
+- [x] `LICENSE` (proprietary placeholder; flagged for legal sign-off)
 
 ### 0.2 CI
 - [ ] GH Actions: fmt + clippy + test on `{ubuntu, windows, macos}`
