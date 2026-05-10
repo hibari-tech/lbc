@@ -9,6 +9,10 @@ use utoipa::OpenApi;
 use crate::auth::Role;
 
 use super::auth::{LoginRequest, LoginResponse, UserSummary};
+use super::devices::{DeviceCreate, DevicePatch, DeviceRead};
+use super::events::EventRead;
+use super::exceptions::ExceptionRead;
+use super::rules::{RuleCreate, RulePatch, RuleRead};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -17,8 +21,30 @@ use super::auth::{LoginRequest, LoginResponse, UserSummary};
         version = "0.1.0",
         description = "Local API exposed by an LBC edge node. Phase 0 surface."
     ),
-    paths(super::auth::login, super::auth::me),
-    components(schemas(LoginRequest, LoginResponse, UserSummary, Role)),
+    paths(
+        super::auth::login,
+        super::auth::me,
+        super::devices::list,
+        super::devices::create,
+        super::devices::get,
+        super::devices::patch,
+        super::devices::delete,
+        super::rules::list,
+        super::rules::create,
+        super::rules::get,
+        super::rules::patch,
+        super::rules::delete,
+        super::events::list,
+        super::events::get,
+        super::exceptions::list,
+        super::exceptions::get,
+    ),
+    components(schemas(
+        LoginRequest, LoginResponse, UserSummary, Role,
+        DeviceRead, DeviceCreate, DevicePatch,
+        RuleRead, RuleCreate, RulePatch,
+        EventRead, ExceptionRead,
+    )),
     modifiers(&BearerAuthAddon),
 )]
 pub struct ApiDoc;

@@ -9,8 +9,12 @@ pub mod error;
 pub mod extractors;
 
 pub(crate) mod auth;
+pub(crate) mod devices;
+pub(crate) mod events;
+pub(crate) mod exceptions;
 pub(crate) mod meta;
 pub(crate) mod openapi;
+pub(crate) mod rules;
 
 use axum::extract::FromRef;
 use axum::routing::{get, post};
@@ -37,14 +41,26 @@ pub fn router(state: AppState) -> Router {
         .route("/version", get(meta::version))
         .route("/openapi.json", get(meta::openapi_json))
         .route("/auth/login", post(auth::login))
-        .route("/auth/me", get(auth::me));
+        .route("/auth/me", get(auth::me))
+        .route("/devices", get(devices::list).post(devices::create))
+        .route(
+            "/devices/{id}",
+            get(devices::get)
+                .patch(devices::patch)
+                .delete(devices::delete),
+        )
+        .route("/rules", get(rules::list).post(rules::create))
+        .route(
+            "/rules/{id}",
+            get(rules::get).patch(rules::patch).delete(rules::delete),
+        )
+        .route("/events", get(events::list))
+        .route("/events/{id}", get(events::get))
+        .route("/exceptions", get(exceptions::list))
+        .route("/exceptions/{id}", get(exceptions::get));
 
     Router::<AppState>::new()
         .route("/healthz", get(meta::healthz))
         .nest("/api/v1", api_v1)
         .with_state(state)
 }
-
-/// Avoid `_ = DEFAULT_BRANCH_ID` warnings until PR B starts using it.
-#[allow(dead_code)]
-const _: i64 = DEFAULT_BRANCH_ID;
