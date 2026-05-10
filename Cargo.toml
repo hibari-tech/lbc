@@ -13,6 +13,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.78"
 license = "Proprietary"
+publish = false
 repository = "https://github.com/hibari-tech/lbc"
 
 [workspace.dependencies]
