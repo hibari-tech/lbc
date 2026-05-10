@@ -17,11 +17,17 @@ pub struct Config {
     pub server: ServerConfig,
     pub logging: LoggingConfig,
     pub database: DatabaseConfig,
+    pub blobs: BlobsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobsConfig {
+    pub root: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +55,9 @@ impl Default for Config {
             },
             database: DatabaseConfig {
                 path: PathBuf::from("lbc-edge.db"),
+            },
+            blobs: BlobsConfig {
+                root: PathBuf::from("lbc-edge-blobs"),
             },
         }
     }

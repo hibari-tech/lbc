@@ -1,20 +1,31 @@
 //! SQLite-backed persistent storage for the edge node.
 //!
-//! Migrations are embedded at compile time (`crates/edge/migrations/`) and
-//! applied automatically by [`open`]. The pool is configured for WAL + a
-//! 5 s busy timeout; foreign keys are enforced.
+//! Migration SQL is baked into the binary via `include_str!` and applied by
+//! [`open`]. Applied versions are tracked in `_migrations`. The pool runs in
+//! WAL mode with a 5 s busy timeout and foreign keys enforced.
 
 pub mod audit;
+pub mod blobs;
 
 use std::path::Path;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+struct EmbeddedMigration {
+    version: i64,
+    description: &'static str,
+    sql: &'static str,
+}
+
+const MIGRATIONS: &[EmbeddedMigration] = &[EmbeddedMigration {
+    version: 20_260_510_130_000,
+    description: "initial schema",
+    sql: include_str!("../../migrations/20260510130000_initial_schema.sql"),
+}];
 
 #[derive(Clone)]
 pub struct Db {
@@ -47,9 +58,60 @@ pub async fn open(path: &Path) -> anyhow::Result<Db> {
         .connect_with(opts)
         .await
         .with_context(|| format!("opening sqlite pool at {}", path.display()))?;
-    MIGRATOR
-        .run(&pool)
+    apply_migrations(&pool)
         .await
         .context("applying database migrations")?;
     Ok(Db { pool })
+}
+
+async fn apply_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::raw_sql(
+        "CREATE TABLE IF NOT EXISTS _migrations (\
+            version INTEGER PRIMARY KEY,\
+            description TEXT NOT NULL,\
+            applied_at INTEGER NOT NULL\
+        ) STRICT",
+    )
+    .execute(pool)
+    .await
+    .context("creating _migrations table")?;
+
+    for m in MIGRATIONS {
+        let already: Option<i64> =
+            sqlx::query_scalar("SELECT version FROM _migrations WHERE version = ?")
+                .bind(m.version)
+                .fetch_optional(pool)
+                .await
+                .context("checking _migrations")?;
+        if already.is_some() {
+            continue;
+        }
+
+        let mut tx = pool.begin().await.context("begin migration tx")?;
+        sqlx::raw_sql(m.sql)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("applying migration {} ({})", m.version, m.description))?;
+        sqlx::query("INSERT INTO _migrations (version, description, applied_at) VALUES (?, ?, ?)")
+            .bind(m.version)
+            .bind(m.description)
+            .bind(now_ms())
+            .execute(&mut *tx)
+            .await
+            .context("recording migration")?;
+        tx.commit().await.context("commit migration tx")?;
+        tracing::info!(
+            version = m.version,
+            description = m.description,
+            "migration applied"
+        );
+    }
+    Ok(())
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }

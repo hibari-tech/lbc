@@ -29,6 +29,8 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
         .await
         .context("opening edge database")?;
     tracing::info!(path = %cfg.database.path.display(), "database ready");
+    let _blobs = storage::blobs::BlobStore::open(&cfg.blobs.root).context("opening blob store")?;
+    tracing::info!(root = %cfg.blobs.root.display(), "blob store ready");
     let listener = tokio::net::TcpListener::bind(cfg.server.bind)
         .await
         .with_context(|| format!("binding {}", cfg.server.bind))?;
