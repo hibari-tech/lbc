@@ -5,6 +5,7 @@
 //! blob store, password hashing + JWTs, admin-seed CLI, hardware fingerprint
 //! + license activation against the Control Plane.
 
+pub mod actions;
 pub mod activate;
 pub mod admin;
 pub mod auth;

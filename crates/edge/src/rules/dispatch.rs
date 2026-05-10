@@ -11,6 +11,7 @@ use anyhow::Context as _;
 use serde_json::Value;
 use sqlx::Row;
 
+use crate::actions::{self, ActionResult};
 use crate::storage::Db;
 
 use super::engine::{EventForRule, Outcome, RuleEngine};
@@ -64,10 +65,38 @@ pub async fn evaluate_event(
             }
         };
         if outcome.matched {
-            persist_rule_run(db, rule_id, event_id, &outcome)
+            let rule_run_id = persist_rule_run(db, rule_id, event_id, &outcome)
                 .await
                 .with_context(|| format!("persisting rule_run for rule {rule_id}"))?;
             matched.push(rule_id);
+            for action in &outcome.actions {
+                match actions::dispatch(db, rule_run_id, action).await {
+                    Ok(ActionResult {
+                        ok: false,
+                        response,
+                        status,
+                        ..
+                    }) => {
+                        tracing::warn!(
+                            rule_id,
+                            kind = %action.kind,
+                            target = %action.target,
+                            status,
+                            response = %response,
+                            "action dispatch reported failure"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!(
+                            rule_id,
+                            kind = %action.kind,
+                            error = ?e,
+                            "action dispatch errored"
+                        );
+                    }
+                }
+            }
         }
     }
 
