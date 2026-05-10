@@ -60,18 +60,24 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
             "using the built-in dev JWT secret — set LBC_EDGE_AUTH__JWT_SECRET in production"
         );
     }
-    let _db = storage::open(&cfg.database.path)
+    let db = storage::open(&cfg.database.path)
         .await
         .context("opening edge database")?;
     tracing::info!(path = %cfg.database.path.display(), "database ready");
     let _blobs = storage::blobs::BlobStore::open(&cfg.blobs.root).context("opening blob store")?;
     tracing::info!(root = %cfg.blobs.root.display(), "blob store ready");
+    let session_ttl_secs = u64::try_from(cfg.auth.session_ttl_secs.max(0)).unwrap_or(0);
+    let state = http::AppState {
+        db,
+        jwt_secret: auth::JwtSecret::from_string(&cfg.auth.jwt_secret),
+        session_ttl_secs,
+    };
     let listener = tokio::net::TcpListener::bind(cfg.server.bind)
         .await
         .with_context(|| format!("binding {}", cfg.server.bind))?;
     let bound = listener.local_addr()?;
     tracing::info!(addr = %bound, version = env!("CARGO_PKG_VERSION"), "lbc-edge listening");
-    axum::serve(listener, http::router())
+    axum::serve(listener, http::router(state))
         .with_graceful_shutdown(shutdown::signal())
         .await
         .context("axum::serve")?;

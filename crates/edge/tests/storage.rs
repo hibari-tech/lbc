@@ -55,7 +55,7 @@ async fn migrations_are_idempotent_across_reopen() {
         .fetch_one(second.pool())
         .await
         .expect("count migrations");
-    assert_eq!(rows, 1, "initial migration recorded exactly once");
+    assert_eq!(rows, 2, "phase 0 migrations recorded once each");
 }
 
 #[tokio::test]

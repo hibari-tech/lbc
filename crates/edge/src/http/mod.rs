@@ -1,0 +1,50 @@
+//! HTTP layer for the edge node.
+//!
+//! Public entry point is [`router`], which turns an [`AppState`] into a
+//! fully-wired axum router. Sub-modules host handlers grouped by resource;
+//! none of them should be `pub` outside this directory — the only callers
+//! are the router builder and the integration test harness.
+
+pub mod error;
+pub mod extractors;
+
+pub(crate) mod auth;
+pub(crate) mod meta;
+pub(crate) mod openapi;
+
+use axum::extract::FromRef;
+use axum::routing::{get, post};
+use axum::Router;
+
+use crate::auth::JwtSecret;
+use crate::storage::Db;
+
+/// Branch id every Phase-0 CRUD endpoint implicitly uses until license
+/// activation in §0.9 mints real branches and rotates this constant out.
+/// Grep for `DEFAULT_BRANCH_ID` when wiring real branch scoping.
+pub(crate) const DEFAULT_BRANCH_ID: i64 = 1;
+
+#[derive(Clone, FromRef)]
+pub struct AppState {
+    pub db: Db,
+    pub jwt_secret: JwtSecret,
+    pub session_ttl_secs: u64,
+}
+
+pub fn router(state: AppState) -> Router {
+    let api_v1 = Router::<AppState>::new()
+        .route("/healthz", get(meta::healthz))
+        .route("/version", get(meta::version))
+        .route("/openapi.json", get(meta::openapi_json))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/me", get(auth::me));
+
+    Router::<AppState>::new()
+        .route("/healthz", get(meta::healthz))
+        .nest("/api/v1", api_v1)
+        .with_state(state)
+}
+
+/// Avoid `_ = DEFAULT_BRANCH_ID` warnings until PR B starts using it.
+#[allow(dead_code)]
+const _: i64 = DEFAULT_BRANCH_ID;
