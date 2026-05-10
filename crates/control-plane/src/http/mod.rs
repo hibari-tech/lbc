@@ -3,6 +3,7 @@
 pub mod error;
 pub mod licenses;
 
+pub(crate) mod admin;
 pub(crate) mod meta;
 pub(crate) mod openapi;
 
@@ -27,8 +28,20 @@ pub fn router(state: AppState) -> Router {
         .route("/licenses/{id}/heartbeat", post(licenses::heartbeat))
         .route("/licenses/{id}/revoke", post(licenses::revoke));
 
+    let admin = Router::<AppState>::new()
+        .route("/", get(admin::index))
+        .route(
+            "/accounts",
+            get(admin::list_accounts).post(admin::create_account),
+        )
+        .route("/accounts/new", get(admin::new_account_form))
+        .route("/branches", get(admin::list_branches))
+        .route("/licenses", get(admin::list_licenses))
+        .route("/licenses/{id}/revoke", post(admin::revoke_form));
+
     Router::<AppState>::new()
         .route("/healthz", get(meta::healthz))
         .nest("/api/v1", api_v1)
+        .nest("/admin", admin)
         .with_state(state)
 }

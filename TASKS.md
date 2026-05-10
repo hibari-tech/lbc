@@ -63,7 +63,7 @@ Active phase: **Phase 0 — Foundations**.
 - [x] license issuance API (`POST /api/v1/licenses/activate` — verifies key hash, enforces branch-count cap, ed25519-signs payload, persists `issued_license`)
 - [x] license revocation API (`POST /api/v1/licenses/{id}/revoke`, idempotent)
 - [x] heartbeat API (`POST /api/v1/licenses/{id}/heartbeat` — verifies fingerprint, refuses revoked, updates `last_seen`). Token-based auth (signed-license JWT) deferred to Phase 1; Phase 0 uses fingerprint match as the credential.
-- [ ] minimal admin web (list accounts, branches, licenses) — separate small PR
+- [x] minimal admin web (server-rendered HTML at `/admin`): index, accounts list + mint form, branches list, issued-licenses list with revoke buttons. No auth in Phase 0 (TOFIX before deploy).
 
 ### 0.9 Activation flow (E2E)
 - [x] Edge: hardware fingerprint module (Phase 0: hostname + primary MAC via blake3; CPU brand / motherboard serial / TPM EK / N-of-M match deferred to Phase 1 — see TOFIX)
