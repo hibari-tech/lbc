@@ -13,6 +13,7 @@ pub mod fingerprint;
 pub mod heartbeat;
 pub mod http;
 pub mod license;
+pub mod rules;
 pub mod storage;
 
 mod config;
@@ -115,6 +116,7 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
         db,
         jwt_secret: auth::JwtSecret::from_string(&cfg.auth.jwt_secret),
         session_ttl_secs,
+        rule_engine: rules::RuleEngine::new(),
     };
     let listener = tokio::net::TcpListener::bind(cfg.server.bind)
         .await

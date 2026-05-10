@@ -15,6 +15,18 @@ once we tag a `v1.0.0`.
   Persists to `event` table; uses payload's `kind` field if present,
   else `"webhook"`. Spec `lbcspec.md` §4.1 first bullet, §5.4 replay
   protection.
+- **Rule engine MVP** (Rhai sandbox) — `edge::rules::RuleEngine`
+  compiles and evaluates user scripts against incoming events. Rules
+  whose `definition` JSON has a top-level `script` string are
+  evaluated; the script gets `event` in scope as a map (`event.kind`,
+  `event.ts`, `event.device_id`, `event.payload`) and returns a truthy
+  value to fire. Sandbox bounds: 100k op limit, 20 call levels, 64KB
+  string, 10k array, 1k map. Matched rules persist `rule_run` rows
+  with the triggering event id. Wired into webhook ingest so a real
+  POST that matches a rule produces a `rule_run` row by the time the
+  response returns. Visual-builder rules (those without a `script`)
+  are silently skipped — they land once §0.7 / SPIKE-01 picks the UI
+  stack. Action layer (HTTP / SMTP / FTP / Nx) is the next slice.
 
 ## Phase 0 — 2026-05-10
 
