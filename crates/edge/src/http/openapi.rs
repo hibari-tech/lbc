@@ -12,6 +12,7 @@ use super::auth::{LoginRequest, LoginResponse, UserSummary};
 use super::devices::{DeviceCreate, DevicePatch, DeviceRead};
 use super::events::EventRead;
 use super::exceptions::ExceptionRead;
+use super::ingest::IngestResponse;
 use super::rules::{RuleCreate, RulePatch, RuleRead};
 
 #[derive(OpenApi)]
@@ -19,7 +20,7 @@ use super::rules::{RuleCreate, RulePatch, RuleRead};
     info(
         title = "LBC Edge API",
         version = "0.1.0",
-        description = "Local API exposed by an LBC edge node. Phase 0 surface."
+        description = "Local API exposed by an LBC edge node."
     ),
     paths(
         super::auth::login,
@@ -38,12 +39,14 @@ use super::rules::{RuleCreate, RulePatch, RuleRead};
         super::events::get,
         super::exceptions::list,
         super::exceptions::get,
+        super::ingest::webhook,
     ),
     components(schemas(
         LoginRequest, LoginResponse, UserSummary, Role,
         DeviceRead, DeviceCreate, DevicePatch,
         RuleRead, RuleCreate, RulePatch,
         EventRead, ExceptionRead,
+        IngestResponse,
     )),
     modifiers(&BearerAuthAddon),
 )]

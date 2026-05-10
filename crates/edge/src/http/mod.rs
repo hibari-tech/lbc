@@ -12,6 +12,7 @@ pub(crate) mod auth;
 pub(crate) mod devices;
 pub(crate) mod events;
 pub(crate) mod exceptions;
+pub(crate) mod ingest;
 pub(crate) mod meta;
 pub(crate) mod openapi;
 pub(crate) mod rules;
@@ -57,7 +58,8 @@ pub fn router(state: AppState) -> Router {
         .route("/events", get(events::list))
         .route("/events/{id}", get(events::get))
         .route("/exceptions", get(exceptions::list))
-        .route("/exceptions/{id}", get(exceptions::get));
+        .route("/exceptions/{id}", get(exceptions::get))
+        .route("/ingest/webhooks/{device_id}", post(ingest::webhook));
 
     Router::<AppState>::new()
         .route("/healthz", get(meta::healthz))

@@ -32,6 +32,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "seed default branch",
         sql: include_str!("../../migrations/20260510130001_seed_default_branch.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_510_160_000,
+        description: "device webhook secret",
+        sql: include_str!("../../migrations/20260510160000_device_webhook_secret.sql"),
+    },
 ];
 
 #[derive(Clone)]

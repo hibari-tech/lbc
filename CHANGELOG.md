@@ -4,6 +4,18 @@ All notable changes to LBC. Newest first. Format roughly follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); semver applies
 once we tag a `v1.0.0`.
 
+## Unreleased — Phase 1
+
+### Added
+- **Webhook ingest** (`POST /api/v1/ingest/webhooks/{device_id}`) —
+  HMAC-SHA256 verification with per-device secret stored in a new
+  `device.webhook_secret` column. Headers: `X-LBC-Timestamp` (unix ms,
+  ±5 min skew window) + `X-LBC-Signature` (hex of
+  `HMAC_SHA256(secret, "<ts>.<body>")`, constant-time-compared).
+  Persists to `event` table; uses payload's `kind` field if present,
+  else `"webhook"`. Spec `lbcspec.md` §4.1 first bullet, §5.4 replay
+  protection.
+
 ## Phase 0 — 2026-05-10
 
 First end-to-end pass. Two binaries (`lbc-edge`, `lbc-control-plane`)
