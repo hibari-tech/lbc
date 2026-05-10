@@ -15,7 +15,7 @@ shared.workspace = true
 anyhow = "1"
 argon2 = "0.5"
 rand_core = { version = "0.6", features = ["std"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["macros"] }
 blake3 = "1"
 clap = { version = "4", features = ["derive", "env"] }
 figment = { version = "0.10", features = ["toml", "env"] }
@@ -28,6 +28,7 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+utoipa = "5"
 
 [dev-dependencies]
 tempfile = "3"

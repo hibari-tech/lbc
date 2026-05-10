@@ -40,14 +40,15 @@ Active phase: **Phase 0 — Foundations**.
 - [x] argon2 password hashing (`auth::password::hash` / `verify`, salted PHC strings)
 - [x] session JWT (HS256, short-lived; `auth::token::issue` / `verify`, `Claims { sub, role, iat, exp }`)
 - [x] role enum: `admin | manager | auditor | operator | installer | viewer` with `has_at_least` ranking
-- [ ] middleware: extract user, enforce role per route — deferred to §0.6 (lands with the first protected routes)
+- [x] middleware: extract user, enforce role per route (`AuthUser` extractor with `FromRequestParts`, `AuthUser::require(min_role)` helper)
 - [x] seed admin via CLI on first run (`lbc-edge admin seed --email --password [--role]`, password also accepts `LBC_ADMIN_PASSWORD` env)
 
 ### 0.6 Edge — Local API v0
-- [ ] `/api/v1/healthz`, `/api/v1/version`
-- [ ] `/api/v1/auth/login`, `/api/v1/auth/me`
-- [ ] CRUD stubs for `devices`, `rules`, `events` (read-only), `exceptions` (read-only)
-- [ ] OpenAPI spec generation (`utoipa` or hand-written)
+- [x] `/api/v1/healthz`, `/api/v1/version`
+- [x] `/api/v1/auth/login`, `/api/v1/auth/me` (PR A)
+- [ ] CRUD stubs for `devices`, `rules`, `events` (read-only), `exceptions` (read-only) — PR B
+- [x] OpenAPI spec generation via `utoipa` derive at `/api/v1/openapi.json` (PR A scaffolds; PR B fills in CRUD paths)
+- [x] default-branch seed migration (`branch_id = 1`) so device/event/rule FKs resolve before §0.9
 
 ### 0.7 UI — Tauri shell
 - [ ] decide frontend (Leptos / Dioxus / React) — 2-wk spike, see PLAN §F.1

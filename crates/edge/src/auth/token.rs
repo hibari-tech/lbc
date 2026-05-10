@@ -49,6 +49,10 @@ pub struct Claims {
     pub role: Role,
     pub iat: i64,
     pub exp: i64,
+    /// Optional list of branch ids the user is scoped to. `None` = unrestricted.
+    /// Forward-compat with §0.9 license activation; §0.6 always issues `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_scope: Option<Vec<i64>>,
 }
 
 pub fn issue(
@@ -63,6 +67,7 @@ pub fn issue(
         role,
         iat: now,
         exp: now.saturating_add(ttl_secs),
+        branch_scope: None,
     };
     encode(&Header::new(Algorithm::HS256), &claims, &secret.encoding()).context("encoding jwt")
 }
