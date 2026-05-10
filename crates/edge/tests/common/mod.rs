@@ -1,6 +1,7 @@
 //! Shared test harness — builds a stateful router over a tempfile DB.
 
 use axum::Router;
+use edge::actions::ActionsConfig;
 use edge::auth::JwtSecret;
 use edge::http::AppState;
 use edge::rules::RuleEngine;
@@ -31,6 +32,11 @@ pub async fn test_app() -> TestApp {
         jwt_secret: jwt_secret.clone(),
         session_ttl_secs: TEST_TTL_SECS,
         rule_engine: RuleEngine::new(),
+        // Tests post to in-process echo servers on 127.0.0.1; allow private.
+        // Production defaults to false via Config::default().
+        actions_cfg: ActionsConfig {
+            allow_private_targets: true,
+        },
     };
     let router = edge::http::router(state);
     TestApp {

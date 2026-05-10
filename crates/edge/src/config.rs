@@ -12,6 +12,8 @@ use figment::providers::{Env, Format, Serialized, Toml};
 use figment::Figment;
 use serde::{Deserialize, Serialize};
 
+use crate::actions::ActionsConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
@@ -19,6 +21,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub blobs: BlobsConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub actions: ActionsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +94,7 @@ impl Default for Config {
                 license_path: PathBuf::from("lbc-edge.license.json"),
                 heartbeat_interval_secs: 24 * 60 * 60,
             },
+            actions: ActionsConfig::default(),
         }
     }
 }

@@ -21,6 +21,7 @@ use axum::extract::FromRef;
 use axum::routing::{get, post};
 use axum::Router;
 
+use crate::actions::ActionsConfig;
 use crate::auth::JwtSecret;
 use crate::rules::RuleEngine;
 use crate::storage::Db;
@@ -36,6 +37,7 @@ pub struct AppState {
     pub jwt_secret: JwtSecret,
     pub session_ttl_secs: u64,
     pub rule_engine: RuleEngine,
+    pub actions_cfg: ActionsConfig,
 }
 
 pub fn router(state: AppState) -> Router {

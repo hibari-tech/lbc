@@ -15,6 +15,16 @@ once we tag a `v1.0.0`.
   Persists to `event` table; uses payload's `kind` field if present,
   else `"webhook"`. Spec `lbcspec.md` §4.1 first bullet, §5.4 replay
   protection.
+- **HTTP action SSRF guard** — outbound HTTP actions now verify the
+  target before the request is sent. Scheme is restricted to
+  `http`/`https` (no `file://` etc.); the host (literal or resolved)
+  is checked against an IP block-list of loopback / private / link-local
+  / multicast / unspecified ranges, which covers the cloud-metadata
+  endpoint `169.254.169.254`. Blocked targets surface as `ok=false`
+  with `response: "blocked: <reason>"` and persist as an `error` row
+  in `action_log`. The `actions.allow_private_targets` config flag
+  (env: `LBC_EDGE_ACTIONS__ALLOW_PRIVATE_TARGETS`) is the dev/test
+  escape hatch — startup loud-warn-logs when it's true.
 - **Action layer (HTTP)** — rules can return a map with an `actions`
   array of action descriptors `{ kind, target, method, headers, body }`.
   Each is dispatched after the matching `rule_run` is persisted. Phase 1

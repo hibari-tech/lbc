@@ -113,11 +113,17 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
     let _heartbeat = start_heartbeat_if_configured(&cfg, loaded.as_ref())?;
 
     let session_ttl_secs = u64::try_from(cfg.auth.session_ttl_secs.max(0)).unwrap_or(0);
+    if cfg.actions.allow_private_targets {
+        tracing::warn!(
+            "actions.allow_private_targets=true — outbound HTTP actions can hit loopback/private/link-local IPs (do NOT enable in production)"
+        );
+    }
     let state = http::AppState {
         db,
         jwt_secret: auth::JwtSecret::from_string(&cfg.auth.jwt_secret),
         session_ttl_secs,
         rule_engine: rules::RuleEngine::new(),
+        actions_cfg: cfg.actions.clone(),
     };
     let listener = tokio::net::TcpListener::bind(cfg.server.bind)
         .await

@@ -6,6 +6,21 @@
 //!
 //! All dispatched actions are persisted to the `action_log` table,
 //! linked to the originating `rule_run` row.
+//!
+//! ## SSRF guard
+//!
+//! Rule scripts are admin-authored, but the URL in an HTTP action is
+//! still data flowing into network requests against whatever the
+//! target name resolves to. Without a guard, a malicious or buggy
+//! rule could probe the local network or hit cloud-metadata
+//! endpoints (`169.254.169.254`). [`ActionsConfig`] gates that:
+//!
+//! * `allow_private_targets = false` (default) — http(s) only;
+//!   targets resolving to loopback / private / link-local / multicast
+//!   / unspecified IPs are refused **before** the request is sent.
+//! * `allow_private_targets = true` — escape hatch for dev / tests
+//!   that legitimately POST to localhost echo servers. Set via
+//!   `LBC_EDGE_ACTIONS__ALLOW_PRIVATE_TARGETS=true` or in the TOML.
 
 pub mod http;
 
@@ -17,6 +32,12 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use crate::storage::Db;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ActionsConfig {
+    #[serde(default)]
+    pub allow_private_targets: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionRequest {
@@ -51,11 +72,12 @@ pub struct ActionResult {
 /// fail just because a downstream HTTP endpoint timed out.
 pub async fn dispatch(
     db: &Db,
+    cfg: &ActionsConfig,
     rule_run_id: i64,
     action: &ActionRequest,
 ) -> anyhow::Result<ActionResult> {
     let result = match action.kind.as_str() {
-        "http" => http::execute(action).await,
+        "http" => http::execute(action, cfg).await,
         other => ActionResult {
             ok: false,
             status: 0,

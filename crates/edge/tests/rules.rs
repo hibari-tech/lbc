@@ -147,7 +147,9 @@ async fn dispatch_persists_rule_run_for_matching_rule() {
     .unwrap();
 
     let engine = RuleEngine::new();
-    let report = evaluate_event(&app.db, &engine, 1, event_id).await.unwrap();
+    let report = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+        .await
+        .unwrap();
     assert_eq!(report.matched_rule_ids, vec![rule_id]);
 
     let rows = sqlx::query("SELECT rule_id FROM rule_run")
@@ -179,7 +181,9 @@ async fn dispatch_skips_rules_without_a_script_field() {
     .await
     .unwrap();
     let engine = RuleEngine::new();
-    let report = evaluate_event(&app.db, &engine, 1, event_id).await.unwrap();
+    let report = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+        .await
+        .unwrap();
     assert!(report.matched_rule_ids.is_empty());
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
         .fetch_one(app.db.pool())
@@ -208,7 +212,9 @@ async fn dispatch_ignores_disabled_rules() {
     .await
     .unwrap();
     let engine = RuleEngine::new();
-    let report = evaluate_event(&app.db, &engine, 1, event_id).await.unwrap();
+    let report = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+        .await
+        .unwrap();
     assert!(report.matched_rule_ids.is_empty());
 }
 
