@@ -1,5 +1,5 @@
-//! LBC Edge Node entrypoint. Phase 0 stub.
+//! LBC Edge Node binary entrypoint.
 
-fn main() {
-    println!("lbc-edge {} (stub)", env!("CARGO_PKG_VERSION"));
+fn main() -> anyhow::Result<()> {
+    edge::run()
 }
