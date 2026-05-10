@@ -26,8 +26,8 @@ Crates (workspace):
 
 ## B. Phases
 
-### Phase 0 — Foundations (8–10 wk) [IN PROGRESS]
-Repo, CI, cross-platform build, Tauri shell, axum skeleton, SQLite schema, auth, RBAC, Local API v0. Control Plane skeleton: account, branch reg, license issuance + verification, signed-license activation. Gating, not optional.
+### Phase 0 — Foundations (8–10 wk) [SUBSTANTIVELY DONE — frontend spike pending]
+Repo, CI, cross-platform build, axum skeleton, SQLite schema, auth, RBAC, Local API v0. Control Plane skeleton: account, branch reg, license issuance + verification, signed-license activation, heartbeat, admin web. Edge fingerprint, license storage + verify, activate CLI, heartbeat task, grace state machine. End-to-end activation tested across both binaries. See `CHANGELOG.md` for the full Phase-0 deliverable. Remaining: §0.7 Tauri shell + SPIKE-01 (Leptos / Dioxus / React-fallback). Gating, not optional.
 
 ### Phase 1 — Edge MVP (10–12 wk)
 Webhook + ONVIF ingest. Rule engine: visual builder + Rhai. Actions: HTTP/SMTP/FTP/Nx. Bookmarks. UI for events/rules/devices. Single-branch vs Control Plane. License heartbeat + grace enforcement.
