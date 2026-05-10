@@ -39,6 +39,15 @@ pub struct AuthConfig {
     pub jwt_secret: String,
     /// Token lifetime in seconds.
     pub session_ttl_secs: i64,
+    /// Control Plane base URL (e.g. `https://cp.example.com`). Used by the
+    /// `admin activate` command and future heartbeat / sync tasks.
+    pub cp_url: String,
+    /// Hex-encoded 32-byte ed25519 public key of the Control Plane. Empty
+    /// disables license verification (dev only) and triggers a warn-log
+    /// at startup. Override via `LBC_EDGE_AUTH__CP_PUBLIC_KEY`.
+    pub cp_public_key: String,
+    /// On-disk path where the signed license is persisted after activation.
+    pub license_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +82,9 @@ impl Default for Config {
             auth: AuthConfig {
                 jwt_secret: "INSECURE_DEV_SECRET_CHANGE_ME".into(),
                 session_ttl_secs: 3600,
+                cp_url: "http://127.0.0.1:7979".into(),
+                cp_public_key: String::new(),
+                license_path: PathBuf::from("lbc-edge.license.json"),
             },
         }
     }

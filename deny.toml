@@ -20,6 +20,9 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "CC0-1.0",
+    # Mozilla CA root certificate set (via webpki-roots, pulled by hyper-rustls).
+    # Permissive data-sharing licence — see https://cdla.dev/permissive-2-0/
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

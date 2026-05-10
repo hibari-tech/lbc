@@ -36,6 +36,20 @@ pub enum AdminCommand {
         #[arg(long, default_value = "admin", value_parser = parse_role)]
         role: Role,
     },
+    /// Activate this edge node against a Control Plane.
+    Activate {
+        /// Cleartext license key issued by the Control Plane.
+        #[arg(long, env = "LBC_LICENSE_KEY", hide_env_values = true)]
+        license_key: String,
+        /// Branch name unique within the customer account.
+        #[arg(long)]
+        branch_name: String,
+        /// Override the Control Plane URL configured in `auth.cp_url`.
+        #[arg(long)]
+        cp_url: Option<String>,
+    },
+    /// Print the local hardware fingerprint and exit.
+    Fingerprint,
 }
 
 fn parse_role(s: &str) -> Result<Role, String> {
