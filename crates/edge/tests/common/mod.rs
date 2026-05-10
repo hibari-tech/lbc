@@ -3,6 +3,7 @@
 use axum::Router;
 use edge::auth::JwtSecret;
 use edge::http::AppState;
+use edge::rules::RuleEngine;
 use edge::storage::Db;
 use tempfile::TempDir;
 
@@ -29,6 +30,7 @@ pub async fn test_app() -> TestApp {
         db: db.clone(),
         jwt_secret: jwt_secret.clone(),
         session_ttl_secs: TEST_TTL_SECS,
+        rule_engine: RuleEngine::new(),
     };
     let router = edge::http::router(state);
     TestApp {

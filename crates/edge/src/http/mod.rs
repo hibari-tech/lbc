@@ -22,6 +22,7 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::auth::JwtSecret;
+use crate::rules::RuleEngine;
 use crate::storage::Db;
 
 /// Branch id every Phase-0 CRUD endpoint implicitly uses until license
@@ -34,6 +35,7 @@ pub struct AppState {
     pub db: Db,
     pub jwt_secret: JwtSecret,
     pub session_ttl_secs: u64,
+    pub rule_engine: RuleEngine,
 }
 
 pub fn router(state: AppState) -> Router {

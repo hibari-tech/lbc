@@ -115,6 +115,14 @@ pub async fn webhook(
     .fetch_one(state.db.pool())
     .await?;
 
+    if let Err(e) =
+        crate::rules::evaluate_event(&state.db, &state.rule_engine, DEFAULT_BRANCH_ID, event_id)
+            .await
+    {
+        // Don't fail the ingest just because a rule blew up.
+        tracing::warn!(error = ?e, event_id, "rule evaluation failed");
+    }
+
     Ok(Json(IngestResponse { event_id }))
 }
 
