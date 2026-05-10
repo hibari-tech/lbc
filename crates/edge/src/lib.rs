@@ -4,6 +4,7 @@
 //! config, graceful shutdown on SIGINT/SIGTERM.
 
 pub mod http;
+pub mod storage;
 
 mod config;
 mod logging;
@@ -24,6 +25,10 @@ pub fn run() -> anyhow::Result<()> {
 
 async fn serve(cfg: Config) -> anyhow::Result<()> {
     let _log_guard = logging::init(&cfg.logging)?;
+    let _db = storage::open(&cfg.database.path)
+        .await
+        .context("opening edge database")?;
+    tracing::info!(path = %cfg.database.path.display(), "database ready");
     let listener = tokio::net::TcpListener::bind(cfg.server.bind)
         .await
         .with_context(|| format!("binding {}", cfg.server.bind))?;
