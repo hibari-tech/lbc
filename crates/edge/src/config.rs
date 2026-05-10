@@ -18,6 +18,7 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub database: DatabaseConfig,
     pub blobs: BlobsConfig,
+    pub auth: AuthConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +29,16 @@ pub struct DatabaseConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobsConfig {
     pub root: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// Shared secret used to sign session JWTs (HS256). Must be set to a
+    /// random 32+ byte string in production. Override via
+    /// `LBC_EDGE_AUTH__JWT_SECRET`.
+    pub jwt_secret: String,
+    /// Token lifetime in seconds.
+    pub session_ttl_secs: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +69,10 @@ impl Default for Config {
             },
             blobs: BlobsConfig {
                 root: PathBuf::from("lbc-edge-blobs"),
+            },
+            auth: AuthConfig {
+                jwt_secret: "INSECURE_DEV_SECRET_CHANGE_ME".into(),
+                session_ttl_secs: 3600,
             },
         }
     }

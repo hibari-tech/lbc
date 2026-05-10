@@ -37,11 +37,11 @@ Active phase: **Phase 0 — Foundations**.
 - [x] content-addressed blob store on filesystem (`blake3`) — `BlobStore::open/put/get/exists/path_for`, sharded `<root>/<aa>/<bb>/<hex64>` layout, atomic tmp+rename writes
 
 ### 0.5 Edge — auth + RBAC
-- [ ] argon2 password hashing
-- [ ] session JWT (short-lived, signed)
-- [ ] role enum: `admin | manager | operator | installer | viewer | auditor`
-- [ ] middleware: extract user, enforce role per route
-- [ ] seed admin via CLI on first run
+- [x] argon2 password hashing (`auth::password::hash` / `verify`, salted PHC strings)
+- [x] session JWT (HS256, short-lived; `auth::token::issue` / `verify`, `Claims { sub, role, iat, exp }`)
+- [x] role enum: `admin | manager | auditor | operator | installer | viewer` with `has_at_least` ranking
+- [ ] middleware: extract user, enforce role per route — deferred to §0.6 (lands with the first protected routes)
+- [x] seed admin via CLI on first run (`lbc-edge admin seed --email --password [--role]`, password also accepts `LBC_ADMIN_PASSWORD` env)
 
 ### 0.6 Edge — Local API v0
 - [ ] `/api/v1/healthz`, `/api/v1/version`
