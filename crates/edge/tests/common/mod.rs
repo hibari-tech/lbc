@@ -9,6 +9,9 @@ use tempfile::TempDir;
 pub const TEST_JWT_SECRET: &str = "test-secret-test-secret-test-secret-1234";
 pub const TEST_TTL_SECS: u64 = 3600;
 
+// Each test binary uses a different subset of these fields; allow dead_code
+// to keep the harness shape uniform across tests.
+#[allow(dead_code)]
 pub struct TestApp {
     pub _tmp: TempDir,
     pub db: Db,
