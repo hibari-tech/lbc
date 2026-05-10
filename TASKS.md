@@ -24,11 +24,11 @@ Active phase: **Phase 0 — Foundations**.
 - [x] release workflow scaffold (manual `workflow_dispatch` + tag trigger; `cargo dist init` deferred to first tagged release)
 
 ### 0.3 Edge — runtime skeleton
-- [ ] add `tokio`, `axum`, `tower`, `tracing`, `tracing-subscriber`, `anyhow`
-- [ ] `lbc-edge` boots, binds 127.0.0.1, exposes `GET /healthz`
-- [ ] structured JSON logging to file + console
-- [ ] config loader (`figment` or `config` crate) — file + env
-- [ ] graceful shutdown on SIGINT/SIGTERM
+- [x] add `tokio`, `axum`, `tower`, `tracing`, `tracing-subscriber`, `anyhow`
+- [x] `lbc-edge` boots, binds 127.0.0.1, exposes `GET /healthz` (also `/api/v1/healthz`, `/api/v1/version`)
+- [x] structured logging (pretty or JSON) to console + optional JSON daily-rotated file
+- [x] config loader (`figment`) — defaults < `lbc-edge.toml` (or `$LBC_EDGE_CONFIG`) < `LBC_EDGE_*` env
+- [x] graceful shutdown on SIGINT (all platforms) and SIGTERM (unix)
 
 ### 0.4 Edge — storage
 - [ ] add `sqlx` + SQLite (WAL); embedded migrations dir
