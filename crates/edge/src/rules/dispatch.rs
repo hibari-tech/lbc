@@ -34,7 +34,7 @@ pub async fn evaluate_event(
         .with_context(|| format!("loading event {event_id}"))?;
 
     let rules = sqlx::query(
-        "SELECT id, definition FROM rule \
+        "SELECT id, version, definition FROM rule \
          WHERE branch_id = ? AND enabled = 1 \
          ORDER BY id ASC",
     )
@@ -43,15 +43,26 @@ pub async fn evaluate_event(
     .await
     .context("loading enabled rules")?;
 
+    let now = now_ms();
     let mut matched = Vec::new();
     for r in rules {
         let rule_id: i64 = r.get("id");
+        let version: i64 = r.get("version");
         let definition_text: String = r.get("definition");
         let Some(script_src) = extract_script(&definition_text) else {
             // Rule has no script — visual builder rules etc. land later.
             continue;
         };
-        let script = match engine.compile(rule_id, &script_src) {
+        let throttle_ms = extract_throttle_ms(&definition_text);
+        if let Some(window) = throttle_ms {
+            if let Some(last) = engine.last_fired_at(rule_id) {
+                if now.saturating_sub(last) < window {
+                    tracing::debug!(rule_id, window_ms = window, "throttled; skipping");
+                    continue;
+                }
+            }
+        }
+        let script = match engine.compile_or_fetch(rule_id, version, &script_src) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(rule_id, error = ?e, "rule compile failed; skipping");
@@ -69,6 +80,7 @@ pub async fn evaluate_event(
             let rule_run_id = persist_rule_run(db, rule_id, event_id, &outcome)
                 .await
                 .with_context(|| format!("persisting rule_run for rule {rule_id}"))?;
+            engine.record_fire(rule_id, now);
             matched.push(rule_id);
             for action in &outcome.actions {
                 match actions::dispatch(db, actions_cfg, rule_run_id, action).await {
@@ -134,6 +146,17 @@ fn extract_script(definition_json: &str) -> Option<String> {
         .get("script")
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+/// Read `definition.throttle_secs` and convert to milliseconds. Returns
+/// `None` when the rule isn't throttled (no field, zero, or negative).
+fn extract_throttle_ms(definition_json: &str) -> Option<i64> {
+    let value: Value = serde_json::from_str(definition_json).ok()?;
+    let secs = value.get("throttle_secs")?.as_i64()?;
+    if secs <= 0 {
+        return None;
+    }
+    Some(secs.saturating_mul(1000))
 }
 
 async fn persist_rule_run(

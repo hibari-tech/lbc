@@ -34,7 +34,10 @@
 //! return false;
 //! ```
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use anyhow::Context as _;
 use rhai::{Dynamic, Engine, Map, Scope, AST};
@@ -57,12 +60,27 @@ pub struct Outcome {
     pub actions: Vec<ActionRequest>,
 }
 
-/// Cloneable handle around a sandboxed Rhai engine. The inner `Engine`
-/// is shared via `Arc` because Rhai's `Engine` is not itself `Clone` but
-/// is `Send + Sync` so sharing across handlers is safe.
+struct CacheEntry {
+    version: i64,
+    script: Script,
+    /// Server-clock unix-ms of the last time this rule fired. `None` =
+    /// hasn't fired since process start. Persistence across restarts is
+    /// out of scope; throttle effectively resets on reboot.
+    last_fired_at: Option<i64>,
+}
+
+/// Cloneable handle around a sandboxed Rhai engine plus a shared,
+/// versioned cache of compiled rule scripts.
+///
+/// The inner `Engine` is shared via `Arc` because Rhai's `Engine` is
+/// not itself `Clone` but is `Send + Sync` so sharing across handlers
+/// is safe. The cache is keyed by `rule_id`; the entry's `version`
+/// must match the row's current version or we recompile.
 #[derive(Clone)]
 pub struct RuleEngine {
     rhai: Arc<Engine>,
+    cache: Arc<RwLock<HashMap<i64, CacheEntry>>>,
+    compiles: Arc<AtomicU64>,
 }
 
 impl RuleEngine {
@@ -77,7 +95,15 @@ impl RuleEngine {
         rhai.set_max_map_size(1_000);
         Self {
             rhai: Arc::new(rhai),
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            compiles: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Total compiles since this engine was created. Useful for
+    /// asserting the AST cache is doing its job.
+    pub fn compiles_observed(&self) -> u64 {
+        self.compiles.load(Ordering::Relaxed)
     }
 
     pub fn compile(&self, rule_id: i64, script: &str) -> anyhow::Result<Script> {
@@ -85,7 +111,55 @@ impl RuleEngine {
             .rhai
             .compile(script)
             .with_context(|| format!("compiling rule {rule_id}"))?;
+        self.compiles.fetch_add(1, Ordering::Relaxed);
         Ok(Script { ast, rule_id })
+    }
+
+    /// Compile-or-fetch: returns the cached `Script` if `version` still
+    /// matches; otherwise compiles afresh and replaces the entry. The
+    /// cache is the only durable state in `RuleEngine`.
+    pub fn compile_or_fetch(
+        &self,
+        rule_id: i64,
+        version: i64,
+        src: &str,
+    ) -> anyhow::Result<Script> {
+        if let Ok(guard) = self.cache.read() {
+            if let Some(entry) = guard.get(&rule_id) {
+                if entry.version == version {
+                    return Ok(entry.script.clone());
+                }
+            }
+        }
+        let script = self.compile(rule_id, src)?;
+        if let Ok(mut guard) = self.cache.write() {
+            guard.insert(
+                rule_id,
+                CacheEntry {
+                    version,
+                    script: script.clone(),
+                    last_fired_at: None,
+                },
+            );
+        }
+        Ok(script)
+    }
+
+    /// Returns the most recent fire time recorded via [`record_fire`],
+    /// or `None` if the rule hasn't fired since this process started.
+    pub fn last_fired_at(&self, rule_id: i64) -> Option<i64> {
+        self.cache.read().ok()?.get(&rule_id)?.last_fired_at
+    }
+
+    /// Mark `rule_id` as having fired at `now_ms`. Lazy-creates a
+    /// throttle slot if the rule isn't in the cache yet (shouldn't
+    /// happen in normal flow but keeps the call infallible).
+    pub fn record_fire(&self, rule_id: i64, now_ms: i64) {
+        if let Ok(mut guard) = self.cache.write() {
+            if let Some(entry) = guard.get_mut(&rule_id) {
+                entry.last_fired_at = Some(now_ms);
+            }
+        }
     }
 
     pub fn evaluate(&self, script: &Script, event: &EventForRule) -> anyhow::Result<Outcome> {

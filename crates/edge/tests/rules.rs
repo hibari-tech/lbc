@@ -285,3 +285,188 @@ async fn end_to_end_webhook_fires_rule_via_router() {
     assert_eq!(got_rule, rule_id);
     assert_eq!(inputs, vec![event_id]);
 }
+
+// --- AST cache + throttle ------------------------------------------------
+
+#[test]
+fn engine_cache_returns_same_ast_until_version_bumps() {
+    let engine = RuleEngine::new();
+    let _ = engine
+        .compile_or_fetch(1, 1, r#"event.kind == "motion""#)
+        .expect("compile v1");
+    let after_first = engine.compiles_observed();
+    assert_eq!(after_first, 1);
+
+    // Same (rule_id, version, src) — must hit the cache.
+    let _ = engine
+        .compile_or_fetch(1, 1, r#"event.kind == "motion""#)
+        .expect("cache hit");
+    assert_eq!(engine.compiles_observed(), after_first);
+
+    // Bump version — must recompile.
+    let _ = engine
+        .compile_or_fetch(1, 2, r#"event.kind == "tamper""#)
+        .expect("compile v2");
+    assert_eq!(engine.compiles_observed(), after_first + 1);
+}
+
+#[test]
+fn engine_cache_separates_by_rule_id() {
+    let engine = RuleEngine::new();
+    let _ = engine.compile_or_fetch(1, 1, "true").expect("rule 1");
+    let _ = engine.compile_or_fetch(2, 1, "false").expect("rule 2");
+    assert_eq!(engine.compiles_observed(), 2);
+    let _ = engine.compile_or_fetch(1, 1, "true").expect("hit 1");
+    let _ = engine.compile_or_fetch(2, 1, "false").expect("hit 2");
+    assert_eq!(engine.compiles_observed(), 2);
+}
+
+#[test]
+fn engine_records_and_reads_last_fired_at() {
+    let engine = RuleEngine::new();
+    let _ = engine.compile_or_fetch(7, 1, "true").unwrap();
+    assert_eq!(engine.last_fired_at(7), None);
+    engine.record_fire(7, 12345);
+    assert_eq!(engine.last_fired_at(7), Some(12345));
+    engine.record_fire(7, 99_999);
+    assert_eq!(engine.last_fired_at(7), Some(99_999));
+}
+
+async fn seed_event(db: &edge::storage::Db, ts: i64) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', ?, '{}', ?) RETURNING id",
+    )
+    .bind(ts)
+    .bind(ts)
+    .fetch_one(db.pool())
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn dispatch_cache_avoids_recompiling_across_invocations() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#
+    }))
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'cached', 1, ?, 1, 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    for _ in 0..5 {
+        let event_id = seed_event(&app.db, 100).await;
+        let _ = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        engine.compiles_observed(),
+        1,
+        "5 evaluations of an unchanged rule should compile exactly once"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_cache_invalidates_on_version_bump() {
+    let app = test_app().await;
+    let v1 = serde_json::to_string(&json!({"script": "true"})).unwrap();
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'bump', 1, ?, 1, 0, 0) RETURNING id",
+    )
+    .bind(&v1)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+
+    let engine = RuleEngine::new();
+    let event_id = seed_event(&app.db, 100).await;
+    let _ = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+        .await
+        .unwrap();
+    assert_eq!(engine.compiles_observed(), 1);
+
+    // Bump version + change script.
+    let v2 = serde_json::to_string(&json!({"script": "false"})).unwrap();
+    sqlx::query("UPDATE rule SET version = 2, definition = ? WHERE id = ?")
+        .bind(&v2)
+        .bind(rule_id)
+        .execute(app.db.pool())
+        .await
+        .unwrap();
+    let event_id = seed_event(&app.db, 200).await;
+    let _ = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.compiles_observed(),
+        2,
+        "version bump must trigger a recompile"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_throttle_suppresses_repeat_fires() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": "true",
+        "throttle_secs": 3600,
+    }))
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'noisy', 1, ?, 1, 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    for ts in [100, 200, 300, 400] {
+        let event_id = seed_event(&app.db, ts).await;
+        let _ = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+            .await
+            .unwrap();
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "throttle should let the first event fire and suppress the rest"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_without_throttle_fires_every_event() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({"script": "true"})).unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'unthrottled', 1, ?, 1, 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    for ts in [100, 200, 300] {
+        let event_id = seed_event(&app.db, ts).await;
+        let _ = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+            .await
+            .unwrap();
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 3);
+}
