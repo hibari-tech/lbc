@@ -27,6 +27,15 @@ once we tag a `v1.0.0`.
   satisfies. Use case: "alert if the door has been open for 30 s."
   New `RuleEngine::set_hold_start` / `hold_start_at` / `clear_hold`
   primitives.
+- **MQTT action** — `kind: "mqtt"` action descriptors publish to a
+  topic on a globally-configured broker via `rumqttc`. Phase 1
+  per-action connect / publish / disconnect (no persistent client
+  yet; acceptable for current event volumes). Supports QoS 0/1/2,
+  retain flag, and optional username/password auth. Body accepts
+  string (sent as-is) or JSON (stringified). Empty `server` disables
+  MQTT and records an error row. New `ActionRequest` fields:
+  `topic`, `qos`, `retain`. `actions::mqtt::plan_publish` is a pure
+  validator so the parse paths are testable without a broker.
 - **SMTP action** — `kind: "smtp"` action descriptors send email via
   STARTTLS or implicit-TLS to a globally-configured SMTP server.
   Server / port / credentials / default `From:` live in

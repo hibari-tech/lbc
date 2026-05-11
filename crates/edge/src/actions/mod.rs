@@ -23,6 +23,7 @@
 //!   `LBC_EDGE_ACTIONS__ALLOW_PRIVATE_TARGETS=true` or in the TOML.
 
 pub mod http;
+pub mod mqtt;
 pub mod smtp;
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,6 +44,30 @@ pub struct ActionsConfig {
     /// explaining how to configure it.
     #[serde(default)]
     pub smtp: SmtpConfig,
+    /// MQTT broker connection details. Empty `server` disables MQTT
+    /// actions. See [`MqttConfig`].
+    #[serde(default)]
+    pub mqtt: MqttConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MqttConfig {
+    /// Broker hostname. Empty disables MQTT.
+    #[serde(default)]
+    pub server: String,
+    /// Broker port. Default 1883 (plain) when 0; 8883 is conventional
+    /// for TLS but TLS support is a follow-up.
+    #[serde(default)]
+    pub port: u16,
+    /// MQTT v3.1.1 client id. Empty = auto-generated per-action.
+    #[serde(default)]
+    pub client_id: String,
+    /// MQTT username. Empty = anonymous.
+    #[serde(default)]
+    pub username: String,
+    /// MQTT password.
+    #[serde(default)]
+    pub password: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -94,6 +119,15 @@ pub struct ActionRequest {
     /// when absent. Ignored by HTTP.
     #[serde(default)]
     pub from: Option<String>,
+    /// MQTT topic. Required for `kind = "mqtt"`. Ignored otherwise.
+    #[serde(default)]
+    pub topic: Option<String>,
+    /// MQTT QoS: 0 (default), 1, or 2.
+    #[serde(default)]
+    pub qos: Option<u8>,
+    /// MQTT retained flag.
+    #[serde(default)]
+    pub retain: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +153,7 @@ pub async fn dispatch(
     let result = match action.kind.as_str() {
         "http" => http::execute(action, cfg).await,
         "smtp" => smtp::execute(action, &cfg.smtp).await,
+        "mqtt" => mqtt::execute(action, &cfg.mqtt).await,
         other => ActionResult {
             ok: false,
             status: 0,
