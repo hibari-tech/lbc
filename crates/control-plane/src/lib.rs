@@ -45,7 +45,25 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
         s
     };
 
-    let state = http::AppState { db, signer };
+    let admin_gate = http::AdminGate::from_config(&cfg.admin_auth);
+    if !admin_gate.enabled() {
+        tracing::warn!(
+            "admin web has no authentication — set LBC_CP_ADMIN_AUTH__PASSWORD_HASH \
+             (argon2 PHC string) before exposing /admin beyond loopback"
+        );
+    } else {
+        tracing::info!(
+            user = %admin_gate.username,
+            realm = %admin_gate.realm,
+            "admin web Basic-auth gate enabled"
+        );
+    }
+
+    let state = http::AppState {
+        db,
+        signer,
+        admin_gate,
+    };
     let listener = tokio::net::TcpListener::bind(cfg.server.bind)
         .await
         .with_context(|| format!("binding {}", cfg.server.bind))?;

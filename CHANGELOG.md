@@ -7,6 +7,21 @@ once we tag a `v1.0.0`.
 ## Unreleased — Phase 1
 
 ### Added
+- **Admin web HTTP Basic gate** — every `/admin/*` route on the
+  Control Plane is now wrapped in a middleware that requires
+  `Authorization: Basic <base64(user:pass)>`. The configured
+  password is stored as an argon2 PHC string under
+  `admin_auth.password_hash` (env: `LBC_CP_ADMIN_AUTH__PASSWORD_HASH`),
+  with `admin_auth.username` (default `admin`) and `admin_auth.realm`
+  (default `lbc-admin`) as siblings. Empty `password_hash` keeps the
+  Phase-0 dev behaviour — no gate — but the runtime now logs a loud
+  `warn` at boot in that case. Username is compared in constant
+  time; password is verified with argon2. 401 responses carry a
+  `WWW-Authenticate: Basic realm="..."` header so browsers prompt
+  for credentials. The public API surface (`/api/v1/*`, `/healthz`)
+  is untouched. `AppState` gains `admin_gate: AdminGate`. Stopgap
+  before OIDC/SSO (spec §4.9). Closes the Phase-0 TOFIX entry
+  "control-plane admin web — no authentication in Phase 0".
 - **Heartbeat bearer-secret auth** — `POST /api/v1/licenses/{id}/heartbeat`
   now requires `Authorization: Bearer <token>`. At activation time the
   Control Plane mints 32 random bytes per issued license, hex-encodes

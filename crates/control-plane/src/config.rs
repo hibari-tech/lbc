@@ -14,6 +14,50 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub database: DatabaseConfig,
     pub signing: SigningConfig,
+    #[serde(default)]
+    pub admin_auth: AdminAuthConfig,
+}
+
+/// HTTP Basic gate for the `/admin/*` routes. An empty
+/// `password_hash` disables the gate entirely (dev default) — the
+/// runtime logs a loud warn at boot in that case. `password_hash`
+/// must be a full argon2 PHC string (e.g.
+/// `$argon2id$v=19$m=...$...$...`); generate one with
+/// `lbc-control-plane admin hash-password`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminAuthConfig {
+    #[serde(default = "default_admin_username")]
+    pub username: String,
+    #[serde(default)]
+    pub password_hash: String,
+    /// Realm string surfaced in `WWW-Authenticate`. Browsers show
+    /// this in the credentials prompt.
+    #[serde(default = "default_admin_realm")]
+    pub realm: String,
+}
+
+fn default_admin_username() -> String {
+    "admin".into()
+}
+
+fn default_admin_realm() -> String {
+    "lbc-admin".into()
+}
+
+impl Default for AdminAuthConfig {
+    fn default() -> Self {
+        Self {
+            username: default_admin_username(),
+            password_hash: String::new(),
+            realm: default_admin_realm(),
+        }
+    }
+}
+
+impl AdminAuthConfig {
+    pub fn enabled(&self) -> bool {
+        !self.password_hash.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +99,7 @@ impl Default for Config {
             signing: SigningConfig {
                 key_hex: String::new(),
             },
+            admin_auth: AdminAuthConfig::default(),
         }
     }
 }

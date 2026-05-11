@@ -28,6 +28,14 @@ async fn spawn_cp() -> (CpHarness, control_plane::storage::Db) {
     let state = CpAppState {
         db: db.clone(),
         signer,
+        // Phase-0 dev gate: disabled. The edge activation flow
+        // never touches /admin so this can't matter for the tests
+        // — but the struct field is required.
+        admin_gate: control_plane::http::AdminGate {
+            username: "admin".into(),
+            password_hash: String::new(),
+            realm: "lbc-admin".into(),
+        },
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

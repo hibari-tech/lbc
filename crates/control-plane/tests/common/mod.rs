@@ -1,19 +1,52 @@
 //! Test harness for Control Plane integration tests.
 
 use axum::Router;
-use control_plane::http::AppState;
+use control_plane::http::{AdminGate, AppState};
 use control_plane::signing::LicenseSigner;
 use control_plane::storage::Db;
 use tempfile::TempDir;
 
+#[allow(dead_code)]
 pub struct TestApp {
     pub _tmp: TempDir,
     pub db: Db,
     pub router: Router,
     pub signer: LicenseSigner,
+    pub admin_gate: AdminGate,
 }
 
 pub async fn test_app() -> TestApp {
+    // Default: admin gate disabled. Most tests assert the
+    // *behaviour* of admin routes, not the auth gate; the gate has
+    // its own integration tests via `test_app_with_admin_auth`.
+    test_app_with_admin_gate(AdminGate {
+        username: "admin".into(),
+        password_hash: String::new(),
+        realm: "lbc-admin".into(),
+    })
+    .await
+}
+
+#[allow(dead_code)]
+pub async fn test_app_with_admin_auth(username: &str, password: &str) -> TestApp {
+    use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
+    // Fixed salt for test determinism — irrelevant to security
+    // since the harness tempdir is destroyed after each test.
+    let salt = SaltString::from_b64("c2FsdHNhbHRzYWx0c2FsdA").unwrap();
+    let hash = Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .unwrap()
+        .to_string();
+    test_app_with_admin_gate(AdminGate {
+        username: username.into(),
+        password_hash: hash,
+        realm: "lbc-admin".into(),
+    })
+    .await
+}
+
+async fn test_app_with_admin_gate(admin_gate: AdminGate) -> TestApp {
     let tmp = TempDir::new().expect("tempdir");
     let db = control_plane::storage::open(&tmp.path().join("cp.db"))
         .await
@@ -22,6 +55,7 @@ pub async fn test_app() -> TestApp {
     let state = AppState {
         db: db.clone(),
         signer: signer.clone(),
+        admin_gate: admin_gate.clone(),
     };
     let router = control_plane::http::router(state);
     TestApp {
@@ -29,6 +63,7 @@ pub async fn test_app() -> TestApp {
         db,
         router,
         signer,
+        admin_gate,
     }
 }
 
