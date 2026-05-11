@@ -22,6 +22,7 @@ clap = { version = "4", features = ["derive", "env"] }
 cron = { version = "0.16", default-features = false }
 figment = { version = "0.10", features = ["toml", "env"] }
 gethostname = "1"
+hex = "0.4"
 hmac = "0.12"
 jsonwebtoken = { version = "9", default-features = false }
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }

@@ -21,6 +21,10 @@ pub struct ActivateResponse {
     pub issued_license_id: i64,
     pub branch_id: i64,
     pub license: SignedLicense,
+    /// Hex-encoded heartbeat bearer secret. Returned once at
+    /// activation; must be persisted by the caller and presented on
+    /// every heartbeat. Losing it forces re-activation.
+    pub heartbeat_token: String,
 }
 
 /// Send an activation request and return the parsed response. Caller is

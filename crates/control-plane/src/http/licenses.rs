@@ -14,8 +14,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{header::AUTHORIZATION, HeaderMap, StatusCode};
 use axum::Json;
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use shared::license::{LicensePayload, SignedLicense};
 use sqlx::Row;
@@ -25,6 +26,9 @@ use super::error::ApiError;
 use super::AppState;
 
 const DEFAULT_GRACE_DAYS: u32 = 30;
+/// Length in bytes of the per-license heartbeat secret. 32 bytes
+/// gives 256-bit entropy and the wire format becomes 64 hex chars.
+const HEARTBEAT_SECRET_LEN: usize = 32;
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +49,12 @@ pub struct ActivateResponse {
     /// Signed license the edge stores and verifies on every start.
     #[schema(value_type = Object)]
     pub license: SignedLicense,
+    /// Cleartext heartbeat secret (hex-encoded 32 bytes). Returned
+    /// exactly once — the CP stores only its BLAKE3 hash. The edge
+    /// must persist this and present it as
+    /// `Authorization: Bearer <token>` on every subsequent heartbeat;
+    /// losing it forces re-activation.
+    pub heartbeat_token: String,
 }
 
 #[utoipa::path(
@@ -136,10 +146,18 @@ pub async fn activate(
     let payload_json = serde_json::to_string(&payload)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("serialising payload: {e}")))?;
 
+    // Mint a fresh heartbeat secret. The cleartext is returned to the
+    // edge exactly once; only its BLAKE3 hash is persisted.
+    let mut secret = [0u8; HEARTBEAT_SECRET_LEN];
+    OsRng.fill_bytes(&mut secret);
+    let secret_hash = blake3::hash(&secret);
+    let heartbeat_token = hex::encode(secret);
+
     let issued_id: i64 = sqlx::query_scalar(
         "INSERT INTO issued_license \
-            (license_key_id, branch_id, payload, signature, issued_at, expires_at) \
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+            (license_key_id, branch_id, payload, signature, issued_at, expires_at, \
+             heartbeat_secret_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(key_id)
     .bind(branch_id)
@@ -147,6 +165,7 @@ pub async fn activate(
     .bind(signed.signature.as_slice())
     .bind(now_ms)
     .bind(expires_at)
+    .bind(secret_hash.as_bytes().as_slice())
     .fetch_one(state.db.pool())
     .await?;
 
@@ -154,6 +173,7 @@ pub async fn activate(
         issued_license_id: issued_id,
         branch_id,
         license: signed,
+        heartbeat_token,
     }))
 }
 
@@ -208,7 +228,8 @@ pub struct HeartbeatResponse {
     request_body = HeartbeatRequest,
     responses(
         (status = 200, body = HeartbeatResponse),
-        (status = 401, description = "Fingerprint mismatch"),
+        (status = 400, description = "Fingerprint mismatch"),
+        (status = 401, description = "Missing or invalid heartbeat token"),
         (status = 404, description = "Unknown id"),
         (status = 410, description = "License revoked"),
     ),
@@ -216,18 +237,34 @@ pub struct HeartbeatResponse {
 pub async fn heartbeat(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    headers: HeaderMap,
     Json(req): Json<HeartbeatRequest>,
 ) -> Result<Json<HeartbeatResponse>, ApiError> {
-    let row =
-        sqlx::query("SELECT payload, expires_at, revoked_at FROM issued_license WHERE id = ?")
-            .bind(id)
-            .fetch_optional(state.db.pool())
-            .await?
-            .ok_or(ApiError::NotFound)?;
+    // Decode the Bearer token before touching the DB — malformed
+    // headers don't need a row lookup. We keep the same response for
+    // every auth-failure shape (missing header, wrong scheme, bad
+    // hex, wrong secret) so an attacker can't distinguish "valid id
+    // but bad token" from "id doesn't exist" once we 401 in both.
+    let presented = extract_bearer_token(&headers).ok_or(ApiError::Unauthorized)?;
+
+    let row = sqlx::query(
+        "SELECT payload, expires_at, revoked_at, heartbeat_secret_hash \
+         FROM issued_license WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(state.db.pool())
+    .await?
+    .ok_or(ApiError::Unauthorized)?;
     let revoked_at: Option<i64> = row.get("revoked_at");
     if revoked_at.is_some() {
         return Err(ApiError::Gone("license revoked".into()));
     }
+    let stored_hash: Vec<u8> = row.get("heartbeat_secret_hash");
+    let presented_hash = blake3::hash(&presented);
+    if !constant_time_eq(&stored_hash, presented_hash.as_bytes()) {
+        return Err(ApiError::Unauthorized);
+    }
+
     let payload_text: String = row.get("payload");
     let payload: LicensePayload = serde_json::from_str(&payload_text)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("decoding stored payload: {e}")))?;
@@ -245,6 +282,36 @@ pub async fn heartbeat(
         last_seen: now_ms,
         expires_at,
     }))
+}
+
+/// Extract the raw bytes of an `Authorization: Bearer <hex>` token.
+/// Returns `None` for missing header, wrong scheme, or non-hex
+/// payload — every malformed input collapses to the same 401 at the
+/// call site.
+fn extract_bearer_token(headers: &HeaderMap) -> Option<Vec<u8>> {
+    let raw = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let rest = raw.strip_prefix("Bearer ")?;
+    let bytes = hex::decode(rest.trim()).ok()?;
+    if bytes.len() == HEARTBEAT_SECRET_LEN {
+        Some(bytes)
+    } else {
+        None
+    }
+}
+
+/// Length-independent constant-time byte compare. `blake3::Hash`
+/// already provides this internally for hash-to-hash compare, but
+/// we read the stored hash as a generic `Vec<u8>` (since the DB
+/// column is opaque), so do it ourselves.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 #[utoipa::path(

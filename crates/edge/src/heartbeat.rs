@@ -38,6 +38,13 @@ pub struct LicenseHealthState {
     /// activation has happened yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issued_license_id: Option<i64>,
+    /// Hex-encoded heartbeat bearer secret returned at activation. The
+    /// edge presents this as `Authorization: Bearer <token>` on every
+    /// heartbeat. `None` means a legacy activation (pre-bearer-gate)
+    /// — `spawn` will skip heartbeating in that case and the operator
+    /// must re-run `admin activate` to re-issue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeat_token: Option<String>,
 }
 
 /// Pure decision: is the license currently in the grace window or past it?
@@ -68,6 +75,7 @@ pub async fn post_heartbeat(
     cp_url: &str,
     issued_license_id: i64,
     hardware_fingerprint: &str,
+    heartbeat_token: &str,
 ) -> anyhow::Result<HeartbeatResponse> {
     let url = format!(
         "{}/api/v1/licenses/{issued_license_id}/heartbeat",
@@ -79,6 +87,7 @@ pub async fn post_heartbeat(
         .context("building heartbeat client")?;
     let resp = client
         .post(&url)
+        .bearer_auth(heartbeat_token)
         .json(&HeartbeatRequest {
             hardware_fingerprint,
         })
@@ -174,6 +183,7 @@ pub fn spawn(
     cp_url: String,
     issued_license_id: i64,
     fingerprint: String,
+    heartbeat_token: String,
     interval: Duration,
     state_path: PathBuf,
     handle: HealthHandle,
@@ -183,7 +193,7 @@ pub fn spawn(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
-            match post_heartbeat(&cp_url, issued_license_id, &fingerprint).await {
+            match post_heartbeat(&cp_url, issued_license_id, &fingerprint, &heartbeat_token).await {
                 Ok(resp) => {
                     handle.record_success(resp.last_seen).await;
                     let snap = handle.snapshot().await;

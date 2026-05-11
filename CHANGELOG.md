@@ -7,6 +7,24 @@ once we tag a `v1.0.0`.
 ## Unreleased — Phase 1
 
 ### Added
+- **Heartbeat bearer-secret auth** — `POST /api/v1/licenses/{id}/heartbeat`
+  now requires `Authorization: Bearer <token>`. At activation time the
+  Control Plane mints 32 random bytes per issued license, hex-encodes
+  them, returns the cleartext exactly once in the activation response
+  as `heartbeat_token`, and persists only the BLAKE3 hash in the new
+  `issued_license.heartbeat_secret_hash` column. The edge stores the
+  token in `<license>.state.json` and presents it on every heartbeat;
+  the CP recomputes BLAKE3 and constant-time-compares. Replaces the
+  Phase-0 fingerprint-only credential: the fingerprint is now a
+  second factor, not the sole one. Migration
+  `20260511190000_heartbeat_bearer_secret.sql` backfills existing
+  rows with random unknowable bytes so legacy activations fail closed
+  (operator must re-run `lbc-edge admin activate`). The `404` for
+  unknown ids on the heartbeat endpoint is now `401` so id
+  enumeration is no easier than guessing the secret. New
+  `ApiError::Unauthorized` on the Control Plane. Closes TOFIX
+  2026-05-10 "control-plane heartbeat auth — fingerprint as sole
+  credential".
 - **Login brute-force gate** — `POST /api/v1/auth/login` now tracks
   consecutive failed attempts per account in three new `user` columns
   (`failed_login_count`, `last_failed_login_ms`, `locked_until_ms`).

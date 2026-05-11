@@ -225,11 +225,13 @@ fn license_health_state_round_trips_through_disk() {
     let original = LicenseHealthState {
         last_seen_at: 1_234_567_890,
         issued_license_id: Some(42),
+        heartbeat_token: Some("deadbeef".repeat(8)),
     };
     edge::heartbeat::save_state(&path, &original).unwrap();
     let loaded = edge::heartbeat::load_state(&path).unwrap();
     assert_eq!(loaded.last_seen_at, original.last_seen_at);
     assert_eq!(loaded.issued_license_id, original.issued_license_id);
+    assert_eq!(loaded.heartbeat_token, original.heartbeat_token);
 }
 
 #[test]
@@ -261,7 +263,7 @@ async fn end_to_end_heartbeat_then_revoke_then_degraded() {
 
     // Drive a single heartbeat directly (rather than spawning the periodic
     // task) so the test stays deterministic.
-    let hb = edge::heartbeat::post_heartbeat(&cp_url, issued_id, &fp)
+    let hb = edge::heartbeat::post_heartbeat(&cp_url, issued_id, &fp, &resp.heartbeat_token)
         .await
         .expect("first heartbeat");
     assert!(hb.last_seen > 0);
@@ -271,6 +273,7 @@ async fn end_to_end_heartbeat_then_revoke_then_degraded() {
         LicenseHealthState {
             last_seen_at: hb.last_seen,
             issued_license_id: Some(issued_id),
+            heartbeat_token: Some(resp.heartbeat_token.clone()),
         },
         30,
     );
@@ -284,7 +287,8 @@ async fn end_to_end_heartbeat_then_revoke_then_degraded() {
         .expect("revoke");
     assert_eq!(revoke.status(), reqwest::StatusCode::NO_CONTENT);
 
-    let post_revoke = edge::heartbeat::post_heartbeat(&cp_url, issued_id, &fp).await;
+    let post_revoke =
+        edge::heartbeat::post_heartbeat(&cp_url, issued_id, &fp, &resp.heartbeat_token).await;
     assert!(
         post_revoke.is_err(),
         "heartbeat after revoke must fail; got {:?}",

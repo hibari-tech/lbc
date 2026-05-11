@@ -73,6 +73,7 @@ async fn run_admin(cfg: Config, cmd: cli::AdminCommand) -> anyhow::Result<()> {
             let initial = heartbeat::LicenseHealthState {
                 last_seen_at: heartbeat::now_ms(),
                 issued_license_id: Some(resp.issued_license_id),
+                heartbeat_token: Some(resp.heartbeat_token.clone()),
             };
             heartbeat::save_state(&state_path, &initial)
                 .context("persisting initial heartbeat state")?;
@@ -170,6 +171,14 @@ fn start_heartbeat_if_configured(
         );
         return Ok(None);
     };
+    let Some(heartbeat_token) = state.heartbeat_token.clone() else {
+        tracing::warn!(
+            path = %state_path.display(),
+            "license state missing heartbeat_token (legacy activation) — \
+             re-run `lbc-edge admin activate` to re-issue; skipping heartbeat"
+        );
+        return Ok(None);
+    };
     if state.last_seen_at <= 0 {
         state.last_seen_at = heartbeat::now_ms();
     }
@@ -184,6 +193,7 @@ fn start_heartbeat_if_configured(
         cfg.auth.cp_url.clone(),
         issued_id,
         loaded.payload.hardware_fingerprint.clone(),
+        heartbeat_token,
         interval,
         state_path,
         handle,

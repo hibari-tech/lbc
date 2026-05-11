@@ -27,6 +27,16 @@ fn post(uri: &str, body: Value) -> Request<Body> {
         .unwrap()
 }
 
+fn post_with_bearer(uri: &str, body: Value, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
 #[tokio::test]
 async fn activate_issues_signed_license_that_verifies() {
     let app = test_app().await;
@@ -240,7 +250,9 @@ async fn healthz_returns_ok() {
     assert_eq!(body_json(resp).await["status"], "ok");
 }
 
-async fn activate(app: &common::TestApp, key: &str, branch: &str, fp: &str) -> i64 {
+/// Activate and return `(issued_license_id, heartbeat_token)`. The
+/// token is needed by every subsequent heartbeat call.
+async fn activate(app: &common::TestApp, key: &str, branch: &str, fp: &str) -> (i64, String) {
     let resp = app
         .router
         .clone()
@@ -255,14 +267,20 @@ async fn activate(app: &common::TestApp, key: &str, branch: &str, fp: &str) -> i
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    body_json(resp).await["issued_license_id"].as_i64().unwrap()
+    let body = body_json(resp).await;
+    let id = body["issued_license_id"].as_i64().unwrap();
+    let token = body["heartbeat_token"]
+        .as_str()
+        .expect("activation response must include heartbeat_token")
+        .to_string();
+    (id, token)
 }
 
 #[tokio::test]
 async fn heartbeat_updates_last_seen() {
     let app = test_app().await;
     let key = seed_account_and_key(&app.db, "hb", "pro", 1).await;
-    let id = activate(&app, &key, "store", "FP-001").await;
+    let (id, token) = activate(&app, &key, "store", "FP-001").await;
 
     let before: Option<i64> =
         sqlx::query_scalar("SELECT last_seen FROM issued_license WHERE id = ?")
@@ -275,9 +293,10 @@ async fn heartbeat_updates_last_seen() {
     let resp = app
         .router
         .clone()
-        .oneshot(post(
+        .oneshot(post_with_bearer(
             &format!("/api/v1/licenses/{id}/heartbeat"),
             json!({"hardware_fingerprint":"FP-001"}),
+            &token,
         ))
         .await
         .unwrap();
@@ -297,13 +316,14 @@ async fn heartbeat_updates_last_seen() {
 async fn heartbeat_rejects_fingerprint_mismatch() {
     let app = test_app().await;
     let key = seed_account_and_key(&app.db, "hb-mis", "pro", 1).await;
-    let id = activate(&app, &key, "store", "ORIG-FP").await;
+    let (id, token) = activate(&app, &key, "store", "ORIG-FP").await;
     let resp = app
         .router
         .clone()
-        .oneshot(post(
+        .oneshot(post_with_bearer(
             &format!("/api/v1/licenses/{id}/heartbeat"),
             json!({"hardware_fingerprint":"OTHER-FP"}),
+            &token,
         ))
         .await
         .unwrap();
@@ -314,7 +334,7 @@ async fn heartbeat_rejects_fingerprint_mismatch() {
 async fn heartbeat_after_revoke_returns_410() {
     let app = test_app().await;
     let key = seed_account_and_key(&app.db, "hb-rev", "pro", 1).await;
-    let id = activate(&app, &key, "store", "FP").await;
+    let (id, token) = activate(&app, &key, "store", "FP").await;
     let revoke = app
         .router
         .clone()
@@ -326,9 +346,10 @@ async fn heartbeat_after_revoke_returns_410() {
     let resp = app
         .router
         .clone()
-        .oneshot(post(
+        .oneshot(post_with_bearer(
             &format!("/api/v1/licenses/{id}/heartbeat"),
             json!({"hardware_fingerprint":"FP"}),
+            &token,
         ))
         .await
         .unwrap();
@@ -336,18 +357,134 @@ async fn heartbeat_after_revoke_returns_410() {
 }
 
 #[tokio::test]
-async fn heartbeat_unknown_id_returns_404() {
+async fn heartbeat_unknown_id_returns_401() {
+    // Pre-Bearer-gate this was 404; with the gate, we 401 before
+    // touching the DB so id enumeration over the heartbeat endpoint
+    // is no easier than guessing the secret.
     let app = test_app().await;
+    let token = "0".repeat(64); // any well-formed token shape
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            "/api/v1/licenses/9999/heartbeat",
+            json!({"hardware_fingerprint":"X"}),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn activate_response_includes_heartbeat_token() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "tok", "pro", 1).await;
     let resp = app
         .router
         .clone()
         .oneshot(post(
-            "/api/v1/licenses/9999/heartbeat",
-            json!({"hardware_fingerprint":"X"}),
+            "/api/v1/licenses/activate",
+            json!({
+                "license_key": key,
+                "branch_name": "store",
+                "hardware_fingerprint": "FP",
+            }),
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let token = body["heartbeat_token"]
+        .as_str()
+        .expect("heartbeat_token field present");
+    // 32 random bytes hex-encoded.
+    assert_eq!(token.len(), 64, "expected 64 hex chars, got {token:?}");
+    assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[tokio::test]
+async fn heartbeat_without_bearer_returns_401() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "hb-noauth", "pro", 1).await;
+    let (id, _token) = activate(&app, &key, "store", "FP").await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({"hardware_fingerprint":"FP"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn heartbeat_with_wrong_bearer_returns_401() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "hb-wrong", "pro", 1).await;
+    let (id, _real_token) = activate(&app, &key, "store", "FP").await;
+    // Well-formed hex of the right length but not the real secret.
+    let wrong = "ff".repeat(32);
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({"hardware_fingerprint":"FP"}),
+            &wrong,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn heartbeat_with_malformed_bearer_returns_401() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "hb-malformed", "pro", 1).await;
+    let (id, _real_token) = activate(&app, &key, "store", "FP").await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({"hardware_fingerprint":"FP"}),
+            "not-hex!!",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn legacy_row_with_unknown_hash_cannot_heartbeat() {
+    // Simulate a row written before the bearer-gate migration: the
+    // migration backfills random bytes that have no known preimage,
+    // so no client-presented token can match. New activations get a
+    // fresh hash whose preimage *is* known to the activator.
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "hb-legacy", "pro", 1).await;
+    let (id, real_token) = activate(&app, &key, "store", "FP").await;
+    // Overwrite the row's hash with random bytes — simulates a legacy
+    // row that survived the migration.
+    sqlx::query("UPDATE issued_license SET heartbeat_secret_hash = randomblob(32) WHERE id = ?")
+        .bind(id)
+        .execute(app.db.pool())
+        .await
+        .unwrap();
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({"hardware_fingerprint":"FP"}),
+            &real_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
