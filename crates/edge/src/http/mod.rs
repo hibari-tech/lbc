@@ -38,6 +38,31 @@ pub struct AppState {
     pub session_ttl_secs: u64,
     pub rule_engine: RuleEngine,
     pub actions_cfg: ActionsConfig,
+    pub login_rate_limit: LoginRateLimit,
+}
+
+/// Per-account brute-force gate for `POST /api/v1/auth/login`. Lifted
+/// out of [`crate::config::AuthConfig`] so the HTTP layer doesn't
+/// drag the wider auth/license configuration around.
+#[derive(Clone, Copy, Debug)]
+pub struct LoginRateLimit {
+    /// Lock the account after this many consecutive failures. `0`
+    /// disables the gate entirely.
+    pub max_failed_attempts: u32,
+    /// Lock duration in seconds.
+    pub lockout_secs: u64,
+}
+
+impl Default for LoginRateLimit {
+    fn default() -> Self {
+        // Matches the AuthConfig defaults — both branches need to agree
+        // so harnesses that don't load the full Config still get a
+        // sensible gate. Tests override explicitly.
+        Self {
+            max_failed_attempts: 5,
+            lockout_secs: 900,
+        }
+    }
 }
 
 pub fn router(state: AppState) -> Router {

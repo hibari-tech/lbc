@@ -3,7 +3,7 @@
 use axum::Router;
 use edge::actions::ActionsConfig;
 use edge::auth::JwtSecret;
-use edge::http::AppState;
+use edge::http::{AppState, LoginRateLimit};
 use edge::rules::RuleEngine;
 use edge::storage::Db;
 use tempfile::TempDir;
@@ -21,7 +21,13 @@ pub struct TestApp {
     pub jwt_secret: JwtSecret,
 }
 
+#[allow(dead_code)]
 pub async fn test_app() -> TestApp {
+    test_app_with(LoginRateLimit::default()).await
+}
+
+#[allow(dead_code)]
+pub async fn test_app_with(login_rate_limit: LoginRateLimit) -> TestApp {
     let tmp = TempDir::new().expect("tempdir");
     let db = edge::storage::open(&tmp.path().join("test.db"))
         .await
@@ -38,6 +44,7 @@ pub async fn test_app() -> TestApp {
             allow_private_targets: true,
             ..Default::default()
         },
+        login_rate_limit,
     };
     let router = edge::http::router(state);
     TestApp {
