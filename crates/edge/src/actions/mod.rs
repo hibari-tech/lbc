@@ -23,6 +23,7 @@
 //!   `LBC_EDGE_ACTIONS__ALLOW_PRIVATE_TARGETS=true` or in the TOML.
 
 pub mod http;
+pub mod modbus;
 pub mod mqtt;
 pub mod smtp;
 
@@ -128,6 +129,19 @@ pub struct ActionRequest {
     /// MQTT retained flag.
     #[serde(default)]
     pub retain: Option<bool>,
+    /// Modbus function discriminator. Phase 1 ships `"write_coil"` and
+    /// `"write_register"`; reads land in a follow-up. Ignored by other
+    /// kinds.
+    #[serde(default)]
+    pub function: Option<String>,
+    /// Modbus slave / unit id (0..=247). Defaults to 1 when absent.
+    /// Ignored by other kinds.
+    #[serde(default)]
+    pub unit_id: Option<u8>,
+    /// Modbus register / coil address (0..=65535). Ignored by other
+    /// kinds.
+    #[serde(default)]
+    pub address: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,6 +168,7 @@ pub async fn dispatch(
         "http" => http::execute(action, cfg).await,
         "smtp" => smtp::execute(action, &cfg.smtp).await,
         "mqtt" => mqtt::execute(action, &cfg.mqtt).await,
+        "modbus" => modbus::execute(action).await,
         other => ActionResult {
             ok: false,
             status: 0,
