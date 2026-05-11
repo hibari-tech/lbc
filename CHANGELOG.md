@@ -15,6 +15,18 @@ once we tag a `v1.0.0`.
   Persists to `event` table; uses payload's `kind` field if present,
   else `"webhook"`. Spec `lbcspec.md` §4.1 first bullet, §5.4 replay
   protection.
+- **Rule debounce (leading-edge)** — rule definitions can carry
+  `debounce_secs: <i64>`; the dispatcher fires the rule on the first
+  match of a burst and silently suppresses further matches until
+  `debounce_secs` of quiet have elapsed from the last match. The
+  window slides on every match (whether fired or suppressed), so a
+  sustained burst keeps suppressing. New `RuleEngine::record_match`
+  / `last_match_at` primitives. Composable with throttle: both checks
+  run independently, so a rule can have `throttle_secs: 60` and
+  `debounce_secs: 5` to mean "fire at most once a minute, and only
+  after the door has been opened at least 5 s apart from the previous
+  opening." Trailing-edge debounce (fire-on-burst-end) needs a timer
+  and lands later. Spec `lbcspec.md` §4.2.
 - **Rule AST cache + per-rule throttle** — `RuleEngine` now caches
   compiled scripts keyed by `(rule_id, version)`. Subsequent evaluations
   of an unchanged rule reuse the AST instead of recompiling per event;

@@ -76,38 +76,55 @@ pub async fn evaluate_event(
                 continue;
             }
         };
-        if outcome.matched {
-            let rule_run_id = persist_rule_run(db, rule_id, event_id, &outcome)
-                .await
-                .with_context(|| format!("persisting rule_run for rule {rule_id}"))?;
-            engine.record_fire(rule_id, now);
-            matched.push(rule_id);
-            for action in &outcome.actions {
-                match actions::dispatch(db, actions_cfg, rule_run_id, action).await {
-                    Ok(ActionResult {
-                        ok: false,
-                        response,
+        if !outcome.matched {
+            continue;
+        }
+        // Debounce: leading-edge — fire on the first match of a burst,
+        // suppress until `debounce_secs` of quiet from any further match.
+        // Every match (fired or suppressed) advances `last_match_at` so
+        // the window keeps sliding while events keep arriving.
+        if let Some(window) = extract_debounce_ms(&definition_text) {
+            let prev = engine.last_match_at(rule_id);
+            engine.record_match(rule_id, now);
+            let is_new_burst = match prev {
+                None => true,
+                Some(t) => now.saturating_sub(t) > window,
+            };
+            if !is_new_burst {
+                tracing::debug!(rule_id, window_ms = window, "debounced; suppressing");
+                continue;
+            }
+        }
+        let rule_run_id = persist_rule_run(db, rule_id, event_id, &outcome)
+            .await
+            .with_context(|| format!("persisting rule_run for rule {rule_id}"))?;
+        engine.record_fire(rule_id, now);
+        matched.push(rule_id);
+        for action in &outcome.actions {
+            match actions::dispatch(db, actions_cfg, rule_run_id, action).await {
+                Ok(ActionResult {
+                    ok: false,
+                    response,
+                    status,
+                    ..
+                }) => {
+                    tracing::warn!(
+                        rule_id,
+                        kind = %action.kind,
+                        target = %action.target,
                         status,
-                        ..
-                    }) => {
-                        tracing::warn!(
-                            rule_id,
-                            kind = %action.kind,
-                            target = %action.target,
-                            status,
-                            response = %response,
-                            "action dispatch reported failure"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::error!(
-                            rule_id,
-                            kind = %action.kind,
-                            error = ?e,
-                            "action dispatch errored"
-                        );
-                    }
+                        response = %response,
+                        "action dispatch reported failure"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!(
+                        rule_id,
+                        kind = %action.kind,
+                        error = ?e,
+                        "action dispatch errored"
+                    );
                 }
             }
         }
@@ -148,11 +165,18 @@ fn extract_script(definition_json: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Read `definition.throttle_secs` and convert to milliseconds. Returns
-/// `None` when the rule isn't throttled (no field, zero, or negative).
 fn extract_throttle_ms(definition_json: &str) -> Option<i64> {
+    extract_window_ms(definition_json, "throttle_secs")
+}
+
+/// Read `definition.debounce_secs` and convert to milliseconds.
+fn extract_debounce_ms(definition_json: &str) -> Option<i64> {
+    extract_window_ms(definition_json, "debounce_secs")
+}
+
+fn extract_window_ms(definition_json: &str, field: &str) -> Option<i64> {
     let value: Value = serde_json::from_str(definition_json).ok()?;
-    let secs = value.get("throttle_secs")?.as_i64()?;
+    let secs = value.get(field)?.as_i64()?;
     if secs <= 0 {
         return None;
     }
