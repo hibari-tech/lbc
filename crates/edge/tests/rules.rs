@@ -470,3 +470,139 @@ async fn dispatch_without_throttle_fires_every_event() {
         .unwrap();
     assert_eq!(count, 3);
 }
+
+#[test]
+fn engine_records_and_reads_last_match_at() {
+    let engine = RuleEngine::new();
+    // Need a cache entry first.
+    engine.compile_or_fetch(11, 1, "true").expect("compile");
+    assert!(engine.last_match_at(11).is_none());
+    engine.record_match(11, 12345);
+    assert_eq!(engine.last_match_at(11), Some(12345));
+    engine.record_match(11, 67890);
+    assert_eq!(engine.last_match_at(11), Some(67890));
+}
+
+#[tokio::test]
+async fn dispatch_debounce_suppresses_matches_within_burst() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#,
+        "debounce_secs": 3600,
+    }))
+    .unwrap();
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'debounce', 1, ?, 1, 0, 0) RETURNING id",
+    )
+    .bind(&definition)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+
+    let engine = RuleEngine::new();
+    // Five events in quick succession; only the first should fire.
+    for _ in 0..5 {
+        let event_id: i64 = sqlx::query_scalar(
+            "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+             VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+        )
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+        let _ = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+            .await
+            .unwrap();
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run WHERE rule_id = ?")
+        .bind(rule_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "leading-edge debounce fires only on burst start");
+}
+
+#[tokio::test]
+async fn dispatch_debounce_fires_again_after_quiet_window() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#,
+        "debounce_secs": 1,
+    }))
+    .unwrap();
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'debounce-restart', 1, ?, 1, 0, 0) RETURNING id",
+    )
+    .bind(&definition)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+
+    let engine = RuleEngine::new();
+    // First match — burst start, fires.
+    let e1: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    evaluate_event(&app.db, &engine, &Default::default(), 1, e1)
+        .await
+        .unwrap();
+    // Simulate a quiet window: backdate last_match_at far enough that
+    // the next match looks like a new burst.
+    engine.record_match(rule_id, 0);
+    let e2: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    evaluate_event(&app.db, &engine, &Default::default(), 1, e2)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run WHERE rule_id = ?")
+        .bind(rule_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 2, "second burst after quiet window must fire");
+}
+
+#[tokio::test]
+async fn dispatch_without_debounce_unchanged() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#,
+    }))
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'no-debounce', 1, ?, 1, 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    for _ in 0..3 {
+        let event_id: i64 = sqlx::query_scalar(
+            "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+             VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+        )
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+        evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+            .await
+            .unwrap();
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 3);
+}
