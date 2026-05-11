@@ -7,6 +7,21 @@ once we tag a `v1.0.0`.
 ## Unreleased — Phase 1
 
 ### Added
+- **Login brute-force gate** — `POST /api/v1/auth/login` now tracks
+  consecutive failed attempts per account in three new `user` columns
+  (`failed_login_count`, `last_failed_login_ms`, `locked_until_ms`).
+  After `auth.max_failed_login_attempts` (default 5) consecutive
+  failures the account locks for `auth.login_lockout_secs`
+  (default 900 = 15 min); a locked account returns `401 Unauthorized`
+  even for the correct password — same status as a wrong-password
+  response, so probing lock state is no easier than guessing the
+  password. A successful login zeroes the counter and clears the
+  lock. Unknown emails do **not** touch any counter (you can't lock
+  an account that doesn't exist). Set
+  `LBC_EDGE_AUTH__MAX_FAILED_LOGIN_ATTEMPTS=0` to disable the gate
+  entirely. New `edge::http::LoginRateLimit` (added to `AppState`).
+  Migration `20260511180000_user_login_rate_limit.sql`. Closes TOFIX
+  2026-05-10 "edge auth — login has no rate limiting / lockout".
 - **Nx Witness action** — `kind: "nx"` action descriptors post a
   Generic Event to a configured Nx Witness Media Server
   (`POST <server>/api/createEvent`). Server URL, HTTP Basic

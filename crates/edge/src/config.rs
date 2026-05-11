@@ -78,6 +78,23 @@ pub struct AuthConfig {
     /// Interval between heartbeats to the Control Plane, in seconds.
     /// Defaults to 24 h. Override for tests or aggressive fleet tracking.
     pub heartbeat_interval_secs: u64,
+    /// Lock an account after this many consecutive failed `POST
+    /// /api/v1/auth/login` attempts. `0` disables the gate (no
+    /// lockout). Default 5.
+    #[serde(default = "default_max_failed_login_attempts")]
+    pub max_failed_login_attempts: u32,
+    /// How long a locked account stays locked, in seconds. Default
+    /// 900 (15 min).
+    #[serde(default = "default_login_lockout_secs")]
+    pub login_lockout_secs: u64,
+}
+
+fn default_max_failed_login_attempts() -> u32 {
+    5
+}
+
+fn default_login_lockout_secs() -> u64 {
+    900
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +133,8 @@ impl Default for Config {
                 cp_public_key: String::new(),
                 license_path: PathBuf::from("lbc-edge.license.json"),
                 heartbeat_interval_secs: 24 * 60 * 60,
+                max_failed_login_attempts: default_max_failed_login_attempts(),
+                login_lockout_secs: default_login_lockout_secs(),
             },
             actions: ActionsConfig::default(),
             rules: RulesConfig::default(),

@@ -125,6 +125,10 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
         session_ttl_secs,
         rule_engine: rule_engine.clone(),
         actions_cfg: cfg.actions.clone(),
+        login_rate_limit: http::LoginRateLimit {
+            max_failed_attempts: cfg.auth.max_failed_login_attempts,
+            lockout_secs: cfg.auth.login_lockout_secs,
+        },
     };
     let _scheduler = rules::scheduler::spawn(
         db.clone(),

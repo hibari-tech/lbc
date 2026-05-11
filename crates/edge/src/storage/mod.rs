@@ -37,6 +37,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "device webhook secret",
         sql: include_str!("../../migrations/20260510160000_device_webhook_secret.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_511_180_000,
+        description: "user login rate limit",
+        sql: include_str!("../../migrations/20260511180000_user_login_rate_limit.sql"),
+    },
 ];
 
 #[derive(Clone)]
