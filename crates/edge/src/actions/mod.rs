@@ -1,9 +1,9 @@
 //! Outbound action dispatch.
 //!
-//! Phase 1 ships `kind = "http"`, `"smtp"`, `"mqtt"`, `"modbus"`, and
-//! `"ftp"`. Nx Witness shares the same shape (an [`ActionRequest`]
-//! descriptor + a per-kind dispatcher) and lands as a follow-up
-//! module.
+//! Phase 1 ships `kind = "http"`, `"smtp"`, `"mqtt"`, `"modbus"`,
+//! `"ftp"`, and `"nx"` (Nx Witness Generic Event). Each shares the
+//! same shape — an [`ActionRequest`] descriptor + a per-kind
+//! dispatcher.
 //!
 //! All dispatched actions are persisted to the `action_log` table,
 //! linked to the originating `rule_run` row.
@@ -27,6 +27,7 @@ pub mod ftp;
 pub mod http;
 pub mod modbus;
 pub mod mqtt;
+pub mod nx;
 pub mod smtp;
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -51,6 +52,29 @@ pub struct ActionsConfig {
     /// actions. See [`MqttConfig`].
     #[serde(default)]
     pub mqtt: MqttConfig,
+    /// Nx Witness Media Server connection details. Empty `server`
+    /// disables Nx actions. See [`NxConfig`].
+    #[serde(default)]
+    pub nx: NxConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NxConfig {
+    /// Nx Media Server base URL (e.g. `https://nx.local:7001`). Empty
+    /// disables Nx actions.
+    #[serde(default)]
+    pub server: String,
+    /// Username for HTTP Basic auth. Empty = no auth header.
+    #[serde(default)]
+    pub username: String,
+    /// Password for HTTP Basic auth.
+    #[serde(default)]
+    pub password: String,
+    /// Skip TLS certificate validation. Nx Media Server ships with a
+    /// self-signed cert by default; setting this to `true` is the
+    /// expected dev / first-install path.
+    #[serde(default)]
+    pub accept_invalid_certs: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -144,6 +168,10 @@ pub struct ActionRequest {
     /// kinds.
     #[serde(default)]
     pub address: Option<u16>,
+    /// Nx Witness Generic Event `source` field. Defaults to `"lbc-edge"`
+    /// when absent. Ignored by other kinds.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,6 +200,7 @@ pub async fn dispatch(
         "mqtt" => mqtt::execute(action, &cfg.mqtt).await,
         "modbus" => modbus::execute(action).await,
         "ftp" => ftp::execute(action).await,
+        "nx" => nx::execute(action, &cfg.nx).await,
         other => ActionResult {
             ok: false,
             status: 0,

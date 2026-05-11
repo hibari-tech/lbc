@@ -7,6 +7,20 @@ once we tag a `v1.0.0`.
 ## Unreleased — Phase 1
 
 ### Added
+- **Nx Witness action** — `kind: "nx"` action descriptors post a
+  Generic Event to a configured Nx Witness Media Server
+  (`POST <server>/api/createEvent`). Server URL, HTTP Basic
+  credentials, and an `accept_invalid_certs` toggle (Nx ships with a
+  self-signed cert) live in `actions.nx.*`; rule scripts pass
+  `subject` (→ `caption`), optional `source` (defaults to
+  `"lbc-edge"`), and `body` (string sent as-is, JSON stringified).
+  Empty `server` disables Nx and records an explicit "Nx not
+  configured" error row. Like Modbus and FTP, the HTTP SSRF guard
+  does **not** apply — Nx is an internal-LAN VMS. New
+  `ActionRequest::source`, `NxConfig`, and `actions::nx::plan_event`
+  (pure validator) so URL / caption / description parsing is testable
+  without a Media Server. Closes the Phase-1 action set
+  (HTTP / SMTP / MQTT / Modbus / FTP / Nx) — spec §4.3.
 - **FTP action** — `kind: "ftp"` action descriptors upload a small
   evidence payload to an internal FTP server. The `target` is a full
   URL — `ftp://[user[:pass]@]host[:port]/path` — so the destination

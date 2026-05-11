@@ -258,9 +258,9 @@ async fn action_dispatch_unknown_kind_logs_error_row() {
     .await
     .unwrap();
     let action = ActionRequest {
-        // http/smtp/mqtt/modbus/ftp are supported; pick something still pending.
-        kind: "nx".into(),
-        target: "nx://server/event".into(),
+        // http/smtp/mqtt/modbus/ftp/nx are supported; pick something still pending.
+        kind: "sftp".into(),
+        target: "sftp://example/upload".into(),
         method: None,
         headers: Default::default(),
         body: None,
@@ -1182,4 +1182,218 @@ async fn modbus_dispatch_records_error_on_unreachable_target() {
         .await
         .unwrap();
     assert_eq!(status, "error");
+}
+
+// --- Nx Witness -----------------------------------------------------------
+
+use edge::actions::nx::{plan_event, NxEvent};
+use edge::actions::NxConfig;
+
+#[test]
+fn nx_plan_event_uses_subject_as_caption() {
+    let action = ActionRequest {
+        kind: "nx".into(),
+        subject: Some("Motion at front door".into()),
+        body: Some(json!("zone=front")),
+        ..Default::default()
+    };
+    let ev: NxEvent = plan_event(&action).expect("plan");
+    assert_eq!(ev.caption, "Motion at front door");
+    assert_eq!(ev.description, "zone=front");
+    assert_eq!(ev.source, "lbc-edge");
+}
+
+#[test]
+fn nx_plan_event_uses_explicit_source() {
+    let action = ActionRequest {
+        kind: "nx".into(),
+        source: Some("camera-7".into()),
+        subject: Some("c".into()),
+        body: Some(json!("d")),
+        ..Default::default()
+    };
+    let ev = plan_event(&action).expect("plan");
+    assert_eq!(ev.source, "camera-7");
+}
+
+#[test]
+fn nx_plan_event_requires_subject() {
+    let action = ActionRequest {
+        kind: "nx".into(),
+        body: Some(json!("d")),
+        ..Default::default()
+    };
+    let err = plan_event(&action).unwrap_err();
+    assert!(err.contains("subject"), "got: {err}");
+}
+
+#[test]
+fn nx_plan_event_empty_subject_rejected() {
+    let action = ActionRequest {
+        kind: "nx".into(),
+        subject: Some(String::new()),
+        body: Some(json!("d")),
+        ..Default::default()
+    };
+    assert!(plan_event(&action).is_err());
+}
+
+#[test]
+fn nx_plan_event_json_body_stringified() {
+    let action = ActionRequest {
+        kind: "nx".into(),
+        subject: Some("c".into()),
+        body: Some(json!({ "zone": "front", "score": 7 })),
+        ..Default::default()
+    };
+    let ev = plan_event(&action).expect("plan");
+    assert!(ev.description.contains("\"zone\""));
+    assert!(ev.description.contains("\"front\""));
+    assert!(ev.description.contains("\"score\""));
+}
+
+#[test]
+fn nx_plan_event_missing_body_empty_description() {
+    let action = ActionRequest {
+        kind: "nx".into(),
+        subject: Some("c".into()),
+        ..Default::default()
+    };
+    let ev = plan_event(&action).expect("plan");
+    assert!(ev.description.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nx_dispatch_with_no_server_configured_records_error() {
+    let app = test_app().await;
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let action = ActionRequest {
+        kind: "nx".into(),
+        subject: Some("caption".into()),
+        body: Some(json!("desc")),
+        ..Default::default()
+    };
+    let cfg = ActionsConfig {
+        nx: NxConfig::default(), // empty server
+        ..Default::default()
+    };
+    let result = dispatch(&app.db, &cfg, rule_run_id, &action).await.unwrap();
+    assert!(!result.ok);
+    assert!(
+        result.response.contains("not configured"),
+        "got: {}",
+        result.response
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
+        .bind(rule_run_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(status, "error");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nx_dispatch_posts_create_event_against_echo_server() {
+    // Nx's createEvent is a POST with query params; the existing echo
+    // server is fine as a stand-in to exercise the full transport path
+    // (URL composition, basic-auth header, success row in action_log).
+    let app = test_app().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let received_clone = received.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let app_router = axum::Router::new().route(
+        "/api/createEvent",
+        axum::routing::post(
+            move |uri: axum::http::Uri, headers: axum::http::HeaderMap| {
+                let received_clone = received_clone.clone();
+                async move {
+                    let mut entry = uri.to_string();
+                    if let Some(auth) = headers.get("authorization") {
+                        entry.push_str(" auth=");
+                        entry.push_str(auth.to_str().unwrap_or(""));
+                    }
+                    received_clone.lock().unwrap().push(entry);
+                    "ok"
+                }
+            },
+        ),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app_router)
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await;
+    });
+
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+
+    let cfg = ActionsConfig {
+        nx: NxConfig {
+            server: format!("http://{addr}"),
+            username: "admin".into(),
+            password: "shh".into(),
+            accept_invalid_certs: false,
+        },
+        ..Default::default()
+    };
+    let action = ActionRequest {
+        kind: "nx".into(),
+        source: Some("lbc-test".into()),
+        subject: Some("Motion".into()),
+        body: Some(json!("zone=front")),
+        ..Default::default()
+    };
+
+    let result = dispatch(&app.db, &cfg, rule_run_id, &action).await.unwrap();
+    assert!(result.ok, "result: {:?}", result.response);
+    assert_eq!(result.status, 200);
+
+    let captured = received.lock().unwrap().clone();
+    assert_eq!(captured.len(), 1);
+    let entry = &captured[0];
+    assert!(entry.starts_with("/api/createEvent?"), "got: {entry}");
+    assert!(entry.contains("source=lbc-test"), "got: {entry}");
+    assert!(entry.contains("caption=Motion"), "got: {entry}");
+    assert!(entry.contains("description=zone%3Dfront"), "got: {entry}");
+    assert!(entry.contains("auth=Basic "), "got: {entry}");
+
+    let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
+        .bind(rule_run_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(status, "ok");
+
+    let _ = tx.send(());
 }

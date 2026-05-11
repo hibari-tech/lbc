@@ -2,7 +2,7 @@
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Active phase: **Phase 0 — Foundations**.
+Active phase: **Phase 1 — Edge MVP** (Phase 0 substantively done; §0.7 Tauri shell still gating, see SPIKE-01).
 
 ---
 
@@ -74,21 +74,22 @@ Active phase: **Phase 0 — Foundations**.
 - [x] integration test: activate → heartbeat → revoke → grace expiry → degraded (CP spun up via lib on a random port; edge drives activate + heartbeat over the wire; grace transition validated via the pure `compute_status` with simulated time).
 
 ### 0.10 Quality gates
-- [ ] `cargo fmt --check` clean
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean
-- [ ] `cargo test --workspace` green
-- [ ] `cargo audit` clean
-- [ ] `cargo deny check` clean
+- [x] `cargo fmt --check` clean
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean
+- [x] `cargo test --workspace` green
+- [ ] `cargo audit` clean (CI-only — see REFLECT 2026-05-10; superseded by `cargo-deny`)
+- [x] `cargo deny check` clean (enforced in CI)
 
 ---
 
 ## Backlog (Phase 1+)
 
-- Webhook receiver w/ HMAC-SHA256 + replay window
-- ONVIF pull-point subscriber behind vendor-quirk trait
-- Rule engine: visual builder spec + Rhai sandbox
-- Action layer: HTTP / SMTP / FTP / Nx Witness
-- Bookmarks + evidence capture
+- [x] Webhook receiver w/ HMAC-SHA256 + replay window
+- [ ] ONVIF pull-point subscriber behind vendor-quirk trait
+- [x] Rule engine: Rhai sandbox (visual builder UI still pending §0.7)
+- [x] Rule time primitives §4.2: throttle, debounce, hold-for, cron schedule
+- [x] Action layer: HTTP / SMTP / MQTT / Modbus / FTP / Nx Witness
+- [ ] Bookmarks + evidence capture
 - POS adapters: OPOS, JSON-HTTP, journal tail
 - Exception templates (8 listed in spec §4.4)
 - Case-management workflow + signed evidence export
