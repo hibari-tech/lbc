@@ -1,8 +1,9 @@
 //! Outbound action dispatch.
 //!
-//! Phase 1 ships `kind = "http"` and `kind = "smtp"`. FTP / MQTT /
-//! Modbus / Nx Witness share the same shape (an [`ActionRequest`]
-//! descriptor + a per-kind dispatcher) and land as follow-up modules.
+//! Phase 1 ships `kind = "http"`, `"smtp"`, `"mqtt"`, `"modbus"`, and
+//! `"ftp"`. Nx Witness shares the same shape (an [`ActionRequest`]
+//! descriptor + a per-kind dispatcher) and lands as a follow-up
+//! module.
 //!
 //! All dispatched actions are persisted to the `action_log` table,
 //! linked to the originating `rule_run` row.
@@ -22,6 +23,7 @@
 //!   that legitimately POST to localhost echo servers. Set via
 //!   `LBC_EDGE_ACTIONS__ALLOW_PRIVATE_TARGETS=true` or in the TOML.
 
+pub mod ftp;
 pub mod http;
 pub mod modbus;
 pub mod mqtt;
@@ -169,6 +171,7 @@ pub async fn dispatch(
         "smtp" => smtp::execute(action, &cfg.smtp).await,
         "mqtt" => mqtt::execute(action, &cfg.mqtt).await,
         "modbus" => modbus::execute(action).await,
+        "ftp" => ftp::execute(action).await,
         other => ActionResult {
             ok: false,
             status: 0,

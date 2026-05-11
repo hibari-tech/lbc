@@ -258,9 +258,9 @@ async fn action_dispatch_unknown_kind_logs_error_row() {
     .await
     .unwrap();
     let action = ActionRequest {
-        // http/smtp/mqtt/modbus are supported; pick something still pending.
-        kind: "ftp".into(),
-        target: "ftp://10.0.0.1/upload/file.txt".into(),
+        // http/smtp/mqtt/modbus/ftp are supported; pick something still pending.
+        kind: "nx".into(),
+        target: "nx://server/event".into(),
         method: None,
         headers: Default::default(),
         body: None,
@@ -964,6 +964,184 @@ fn modbus_plan_request_coil_accepts_integer_zero_one() {
     };
     assert_eq!(plan_request(&on).unwrap().op, ModbusOp::WriteCoil(true));
     assert_eq!(plan_request(&off).unwrap().op, ModbusOp::WriteCoil(false));
+}
+
+// --- FTP plan_request -----------------------------------------------------
+
+#[test]
+fn ftp_plan_request_extracts_url_components() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "ftp://alice:s3cret@10.0.5.10:2121/incoming/alert.json".into(),
+        body: Some(json!("payload")),
+        ..Default::default()
+    };
+    let plan = plan_request(&action).expect("plan");
+    assert_eq!(plan.host, "10.0.5.10");
+    assert_eq!(plan.port, 2121);
+    assert_eq!(plan.username, "alice");
+    assert_eq!(plan.password, "s3cret");
+    assert_eq!(plan.path, "/incoming/alert.json");
+    assert_eq!(plan.payload, b"payload");
+}
+
+#[test]
+fn ftp_plan_request_uses_default_port_21() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "ftp://alice:p@host.example.com/x.txt".into(),
+        body: Some(json!("hi")),
+        ..Default::default()
+    };
+    let plan = plan_request(&action).expect("plan");
+    assert_eq!(plan.port, 21);
+    assert_eq!(plan.host, "host.example.com");
+}
+
+#[test]
+fn ftp_plan_request_anonymous_when_no_userinfo() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "ftp://nas.local/drop/x.json".into(),
+        body: Some(json!("hi")),
+        ..Default::default()
+    };
+    let plan = plan_request(&action).expect("plan");
+    assert_eq!(plan.username, "anonymous");
+    assert_eq!(plan.password, "anonymous@");
+}
+
+#[test]
+fn ftp_plan_request_rejects_empty_target() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        body: Some(json!("hi")),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(err.contains("target"), "got: {err}");
+}
+
+#[test]
+fn ftp_plan_request_rejects_non_ftp_scheme() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "http://10.0.0.1/x".into(),
+        body: Some(json!("hi")),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(err.contains("ftp://"), "got: {err}");
+}
+
+#[test]
+fn ftp_plan_request_rejects_missing_path() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "ftp://nas.local/".into(),
+        body: Some(json!("hi")),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(err.contains("path"), "got: {err}");
+}
+
+#[test]
+fn ftp_plan_request_rejects_missing_body() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "ftp://nas.local/x.json".into(),
+        body: None,
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(err.contains("body"), "got: {err}");
+}
+
+#[test]
+fn ftp_plan_request_string_body_uses_raw_bytes() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "ftp://nas.local/x.txt".into(),
+        body: Some(json!("hello world")),
+        ..Default::default()
+    };
+    let plan = plan_request(&action).expect("plan");
+    assert_eq!(plan.payload, b"hello world");
+}
+
+#[test]
+fn ftp_plan_request_json_object_body_stringified() {
+    use edge::actions::ftp::plan_request;
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "ftp://nas.local/alert.json".into(),
+        body: Some(json!({ "alert": "motion", "zone": "front" })),
+        ..Default::default()
+    };
+    let plan = plan_request(&action).expect("plan");
+    let s = std::str::from_utf8(&plan.payload).unwrap();
+    assert!(s.contains("\"alert\""));
+    assert!(s.contains("\"motion\""));
+    assert!(s.contains("\"front\""));
+}
+
+#[test]
+fn ftp_parse_pasv_extracts_addr() {
+    use edge::actions::ftp::parse_pasv;
+    let addr = parse_pasv("227 Entering Passive Mode (192,168,1,5,200,21)\r\n").unwrap();
+    assert_eq!(addr, "192.168.1.5:51221");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ftp_dispatch_records_error_on_unreachable_target() {
+    let app = test_app().await;
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    // 127.0.0.1:1 — TCP refused, fast failure.
+    let action = ActionRequest {
+        kind: "ftp".into(),
+        target: "ftp://127.0.0.1:1/nope.txt".into(),
+        body: Some(json!("hi")),
+        ..Default::default()
+    };
+    let result = dispatch(&app.db, &allow_private(), rule_run_id, &action)
+        .await
+        .unwrap();
+    assert!(!result.ok);
+    let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
+        .bind(rule_run_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(status, "error");
+    let kind: String = sqlx::query_scalar("SELECT kind FROM action_log WHERE rule_run_id = ?")
+        .bind(rule_run_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(kind, "ftp");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
