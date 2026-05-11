@@ -7,6 +7,21 @@ once we tag a `v1.0.0`.
 ## Unreleased — Phase 1
 
 ### Added
+- **FTP action** — `kind: "ftp"` action descriptors upload a small
+  evidence payload to an internal FTP server. The `target` is a full
+  URL — `ftp://[user[:pass]@]host[:port]/path` — so the destination
+  filename, credentials, and (optional) non-default port travel
+  in-band; anonymous login is used when the URL has no userinfo. The
+  request body becomes the file contents (string bodies sent as-is,
+  JSON objects/arrays stringified, `null` / missing rejected). Phase
+  1 ships plain FTP (RFC 959) over TCP, passive mode, `STOR` only;
+  FTPS / SFTP land later if a deployment needs them and the action
+  shape stays the same. Per-action connect / login / `TYPE I` /
+  `PASV` / `STOR` / `QUIT` with bounded timeouts (5 s connect, 10 s
+  per command, 30 s data transfer). Like Modbus, FTP is treated as an
+  internal-LAN protocol — the SSRF guard that gates HTTP does **not**
+  apply. `actions::ftp::plan_request` is a pure validator so URL /
+  body parsing is testable without an FTP server.
 - **Modbus/TCP action** — `kind: "modbus"` action descriptors write a
   coil (FC 0x05) or holding register (FC 0x06) on an industrial device
   via `tokio-modbus`. Action carries `target` (literal `host:port`),
