@@ -23,6 +23,9 @@ allow = [
     # Mozilla CA root certificate set (via webpki-roots, pulled by hyper-rustls).
     # Permissive data-sharing licence — see https://cdla.dev/permissive-2-0/
     "CDLA-Permissive-2.0",
+    # `quoted_printable` (via lettre). BSD Zero Clause — strictly more
+    # permissive than BSD-2-Clause; effectively public domain.
+    "0BSD",
 ]
 
 [bans]

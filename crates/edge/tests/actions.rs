@@ -18,6 +18,7 @@ use edge::rules::{evaluate_event, RuleEngine};
 fn allow_private() -> ActionsConfig {
     ActionsConfig {
         allow_private_targets: true,
+        ..Default::default()
     }
 }
 
@@ -132,6 +133,7 @@ async fn action_dispatch_persists_action_log_row() {
         method: Some("POST".into()),
         headers: Default::default(),
         body: Some(json!({ "alert": "motion" })),
+        ..Default::default()
     };
     let ActionResult { ok, status, .. } = dispatch(&app.db, &allow_private(), rule_run_id, &action)
         .await
@@ -182,6 +184,7 @@ async fn action_dispatch_records_failure_for_5xx() {
         method: Some("POST".into()),
         headers: Default::default(),
         body: Some(json!({})),
+        ..Default::default()
     };
     let result = dispatch(&app.db, &allow_private(), rule_run_id, &action)
         .await
@@ -226,6 +229,7 @@ async fn action_dispatch_records_transport_error() {
         method: Some("POST".into()),
         headers: Default::default(),
         body: None,
+        ..Default::default()
     };
     let result = dispatch(&app.db, &allow_private(), rule_run_id, &action)
         .await
@@ -254,11 +258,13 @@ async fn action_dispatch_unknown_kind_logs_error_row() {
     .await
     .unwrap();
     let action = ActionRequest {
-        kind: "smtp".into(),
-        target: "ops@example.com".into(),
+        // smtp is now supported; pick something that still isn't.
+        kind: "modbus".into(),
+        target: "tcp://10.0.0.1:502".into(),
         method: None,
         headers: Default::default(),
         body: None,
+        ..Default::default()
     };
     let result = dispatch(&app.db, &allow_private(), rule_run_id, &action)
         .await
@@ -297,6 +303,7 @@ async fn action_dispatch_blocks_loopback_when_disallowed() {
         method: Some("POST".into()),
         headers: Default::default(),
         body: None,
+        ..Default::default()
     };
     let result = dispatch(&app.db, &block_private(), rule_run_id, &action)
         .await
@@ -340,6 +347,7 @@ async fn action_dispatch_blocks_disallowed_scheme() {
         method: Some("GET".into()),
         headers: Default::default(),
         body: None,
+        ..Default::default()
     };
     let result = dispatch(&app.db, &block_private(), rule_run_id, &action)
         .await
@@ -377,6 +385,7 @@ async fn action_dispatch_blocks_link_local_metadata_endpoint() {
         method: Some("GET".into()),
         headers: Default::default(),
         body: None,
+        ..Default::default()
     };
     let result = dispatch(&app.db, &block_private(), rule_run_id, &action)
         .await
@@ -515,4 +524,145 @@ async fn end_to_end_webhook_to_action_log() {
         .await
         .unwrap();
     assert_eq!(action_rows, 1);
+}
+
+// --- SMTP -----------------------------------------------------------------
+
+use edge::actions::smtp::build_message;
+use edge::actions::SmtpConfig;
+
+fn smtp_cfg_with(server: &str, from_default: &str) -> SmtpConfig {
+    SmtpConfig {
+        server: server.into(),
+        port: 587,
+        from_default: from_default.into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn smtp_build_message_uses_action_fields() {
+    let cfg = smtp_cfg_with("smtp.example.com", "ops@example.com");
+    let action = ActionRequest {
+        kind: "smtp".into(),
+        to: vec!["alice@example.com".into(), "bob@example.com".into()],
+        subject: Some("Hello".into()),
+        body: Some(json!("plain text body")),
+        ..Default::default()
+    };
+    let msg = build_message(&action, &cfg).expect("build");
+    let bytes = msg.formatted();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("From: ops@example.com"));
+    // Lettre combines multiple recipients into a single `To:` header.
+    assert!(text.contains("alice@example.com"));
+    assert!(text.contains("bob@example.com"));
+    assert!(text.contains("Subject: Hello"));
+    assert!(text.contains("plain text body"));
+}
+
+#[test]
+fn smtp_build_message_uses_action_from_over_default() {
+    let cfg = smtp_cfg_with("smtp.example.com", "default@example.com");
+    let action = ActionRequest {
+        kind: "smtp".into(),
+        to: vec!["x@example.com".into()],
+        subject: Some("y".into()),
+        from: Some("custom@example.com".into()),
+        body: Some(json!("z")),
+        ..Default::default()
+    };
+    let msg = build_message(&action, &cfg).expect("build");
+    let text = String::from_utf8_lossy(&msg.formatted()).to_string();
+    assert!(text.contains("From: custom@example.com"));
+    assert!(!text.contains("From: default@example.com"));
+}
+
+#[test]
+fn smtp_build_message_requires_recipients() {
+    let cfg = smtp_cfg_with("smtp.example.com", "ops@example.com");
+    let action = ActionRequest {
+        kind: "smtp".into(),
+        to: vec![],
+        subject: Some("y".into()),
+        body: Some(json!("z")),
+        ..Default::default()
+    };
+    let err = build_message(&action, &cfg).unwrap_err();
+    assert!(err.contains("recipient"), "got: {err}");
+}
+
+#[test]
+fn smtp_build_message_requires_from_address() {
+    let cfg = smtp_cfg_with("smtp.example.com", "");
+    let action = ActionRequest {
+        kind: "smtp".into(),
+        to: vec!["x@example.com".into()],
+        subject: Some("y".into()),
+        body: Some(json!("z")),
+        ..Default::default()
+    };
+    let err = build_message(&action, &cfg).unwrap_err();
+    assert!(err.contains("From"), "got: {err}");
+}
+
+#[test]
+fn smtp_build_message_jsonifies_non_string_body() {
+    let cfg = smtp_cfg_with("smtp.example.com", "ops@example.com");
+    let action = ActionRequest {
+        kind: "smtp".into(),
+        to: vec!["x@example.com".into()],
+        subject: Some("y".into()),
+        body: Some(json!({ "alert": "motion", "zone": "front-door" })),
+        ..Default::default()
+    };
+    let msg = build_message(&action, &cfg).expect("build");
+    let text = String::from_utf8_lossy(&msg.formatted()).to_string();
+    assert!(text.contains("alert") && text.contains("motion"));
+    assert!(text.contains("front-door"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn smtp_dispatch_with_no_server_configured_records_error() {
+    let app = test_app().await;
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    // test_app() default ActionsConfig has smtp.server empty.
+    let action = ActionRequest {
+        kind: "smtp".into(),
+        to: vec!["x@example.com".into()],
+        subject: Some("y".into()),
+        body: Some(json!("z")),
+        ..Default::default()
+    };
+    let cfg = ActionsConfig {
+        allow_private_targets: true,
+        smtp: SmtpConfig::default(), // empty
+    };
+    let result = dispatch(&app.db, &cfg, rule_run_id, &action).await.unwrap();
+    assert!(!result.ok);
+    assert!(
+        result.response.contains("not configured"),
+        "got: {}",
+        result.response
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
+        .bind(rule_run_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(status, "error");
 }
