@@ -24,6 +24,7 @@ hmac = "0.12"
 jsonwebtoken = { version = "9", default-features = false }
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 mac_address = "1"
+rumqttc = { version = "0.24", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rhai = { version = "1", default-features = false, features = ["std", "sync", "serde"] }
 serde = { version = "1", features = ["derive"] }

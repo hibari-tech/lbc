@@ -651,6 +651,132 @@ async fn smtp_dispatch_with_no_server_configured_records_error() {
     let cfg = ActionsConfig {
         allow_private_targets: true,
         smtp: SmtpConfig::default(), // empty
+        ..Default::default()
+    };
+    let result = dispatch(&app.db, &cfg, rule_run_id, &action).await.unwrap();
+    assert!(!result.ok);
+    assert!(
+        result.response.contains("not configured"),
+        "got: {}",
+        result.response
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
+        .bind(rule_run_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(status, "error");
+}
+
+// --- MQTT -----------------------------------------------------------------
+
+use edge::actions::mqtt::{plan_publish, PublishPlan};
+use edge::actions::MqttConfig;
+
+#[test]
+fn mqtt_plan_publish_extracts_topic_and_defaults() {
+    let action = ActionRequest {
+        kind: "mqtt".into(),
+        topic: Some("lbc/branch/1/alerts".into()),
+        body: Some(json!("payload-as-string")),
+        ..Default::default()
+    };
+    let plan = plan_publish(&action).expect("plan");
+    assert_eq!(plan.topic, "lbc/branch/1/alerts");
+    assert!(matches!(plan.qos, rumqttc::QoS::AtMostOnce));
+    assert!(!plan.retain);
+    assert_eq!(plan.payload, b"payload-as-string");
+}
+
+#[test]
+fn mqtt_plan_publish_honours_qos_and_retain() {
+    let action = ActionRequest {
+        kind: "mqtt".into(),
+        topic: Some("t".into()),
+        qos: Some(2),
+        retain: Some(true),
+        body: Some(json!({ "k": "v" })),
+        ..Default::default()
+    };
+    let plan = plan_publish(&action).expect("plan");
+    assert!(matches!(plan.qos, rumqttc::QoS::ExactlyOnce));
+    assert!(plan.retain);
+    // JSON object body is stringified.
+    let s = std::str::from_utf8(&plan.payload).unwrap();
+    assert!(s.contains("\"k\""));
+    assert!(s.contains("\"v\""));
+}
+
+#[test]
+fn mqtt_plan_publish_rejects_invalid_qos() {
+    let action = ActionRequest {
+        kind: "mqtt".into(),
+        topic: Some("t".into()),
+        qos: Some(3),
+        ..Default::default()
+    };
+    let err = plan_publish(&action).unwrap_err();
+    assert!(err.contains("QoS"), "got: {err}");
+}
+
+#[test]
+fn mqtt_plan_publish_requires_topic() {
+    let action = ActionRequest {
+        kind: "mqtt".into(),
+        ..Default::default()
+    };
+    let err = plan_publish(&action).unwrap_err();
+    assert!(err.contains("topic"), "got: {err}");
+}
+
+#[test]
+fn mqtt_plan_publish_empty_topic_rejected() {
+    let action = ActionRequest {
+        kind: "mqtt".into(),
+        topic: Some(String::new()),
+        ..Default::default()
+    };
+    assert!(plan_publish(&action).is_err());
+}
+
+#[test]
+fn mqtt_plan_publish_null_body_empty_payload() {
+    let action = ActionRequest {
+        kind: "mqtt".into(),
+        topic: Some("t".into()),
+        ..Default::default()
+    };
+    let plan: PublishPlan = plan_publish(&action).expect("plan");
+    assert!(plan.payload.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mqtt_dispatch_with_no_server_configured_records_error() {
+    let app = test_app().await;
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let action = ActionRequest {
+        kind: "mqtt".into(),
+        topic: Some("alerts".into()),
+        body: Some(json!("hi")),
+        ..Default::default()
+    };
+    let cfg = ActionsConfig {
+        mqtt: MqttConfig::default(), // empty server
+        ..Default::default()
     };
     let result = dispatch(&app.db, &cfg, rule_run_id, &action).await.unwrap();
     assert!(!result.ok);
