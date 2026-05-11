@@ -7,6 +7,20 @@ once we tag a `v1.0.0`.
 ## Unreleased — Phase 1
 
 ### Added
+- **Rule cron schedules** — fourth `lbcspec.md` §4.2 time primitive. The
+  `rule.schedule` column (7-field cron: `sec min hour DoM Month DoW Year`)
+  now drives a periodic scheduler task spawned alongside the heartbeat.
+  Each tick (interval set via `rules.cron_tick_secs`, default 10 s)
+  iterates enabled scheduled rules in the default branch, fires those
+  whose next planned fire time has elapsed, and re-plans. First
+  observation of a rule **seeds** the next fire — it never fires
+  retroactively on edge restart. Scheduled fires emit `rule_run` rows
+  with empty `input_event_ids` so the audit trail distinguishes them
+  from event-driven runs; actions returned from the script dispatch
+  identically to the event path. Throttle / debounce / hold-for are
+  intentionally **not** applied — the cron expression already controls
+  cadence. New `crates/edge/src/rules/scheduler.rs`, `RulesConfig`
+  block, and `RuleEngine::{next_fire_at, set_next_fire_at}` primitives.
 - **Webhook ingest** (`POST /api/v1/ingest/webhooks/{device_id}`) —
   HMAC-SHA256 verification with per-device secret stored in a new
   `device.webhook_secret` column. Headers: `X-LBC-Timestamp` (unix ms,

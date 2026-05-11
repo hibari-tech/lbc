@@ -75,6 +75,13 @@ struct CacheEntry {
     /// the first match in a streak of matches. `None` = not currently
     /// holding (either no match seen yet or the streak broke).
     hold_start_at: Option<i64>,
+    /// Server-clock unix-ms when this scheduled rule should next fire.
+    /// Computed from the cron expression on the first scheduler
+    /// observation and updated after every fire. `None` = rule has not
+    /// yet been seen by the scheduler (or is event-driven). Distinct
+    /// from `last_fired_at` so we don't double-fire on first observation
+    /// or after a config change.
+    next_fire_at: Option<i64>,
 }
 
 /// Cloneable handle around a sandboxed Rhai engine plus a shared,
@@ -149,6 +156,7 @@ impl RuleEngine {
                     last_fired_at: None,
                     last_match_at: None,
                     hold_start_at: None,
+                    next_fire_at: None,
                 },
             );
         }
@@ -213,6 +221,23 @@ impl RuleEngine {
         if let Ok(mut guard) = self.cache.write() {
             if let Some(entry) = guard.get_mut(&rule_id) {
                 entry.hold_start_at = None;
+            }
+        }
+    }
+
+    /// Returns the next planned fire time for a cron-scheduled rule.
+    /// `None` means the scheduler hasn't observed this rule yet — the
+    /// first tick will seed it (and skip firing) so we don't fire late
+    /// scheduled rules on edge restart.
+    pub fn next_fire_at(&self, rule_id: i64) -> Option<i64> {
+        self.cache.read().ok()?.get(&rule_id)?.next_fire_at
+    }
+
+    /// Record the next fire time for a cron-scheduled rule.
+    pub fn set_next_fire_at(&self, rule_id: i64, when_ms: i64) {
+        if let Ok(mut guard) = self.cache.write() {
+            if let Some(entry) = guard.get_mut(&rule_id) {
+                entry.next_fire_at = Some(when_ms);
             }
         }
     }

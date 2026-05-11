@@ -23,6 +23,29 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub actions: ActionsConfig,
+    #[serde(default)]
+    pub rules: RulesConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RulesConfig {
+    /// How often the cron driver ticks. Sets the lower bound on cron
+    /// resolution — schedules finer than this interval will collapse to
+    /// the tick rate. Default 10 s.
+    #[serde(default = "default_cron_tick_secs")]
+    pub cron_tick_secs: u64,
+}
+
+fn default_cron_tick_secs() -> u64 {
+    10
+}
+
+impl Default for RulesConfig {
+    fn default() -> Self {
+        Self {
+            cron_tick_secs: default_cron_tick_secs(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +118,7 @@ impl Default for Config {
                 heartbeat_interval_secs: 24 * 60 * 60,
             },
             actions: ActionsConfig::default(),
+            rules: RulesConfig::default(),
         }
     }
 }

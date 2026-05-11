@@ -118,13 +118,25 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
             "actions.allow_private_targets=true — outbound HTTP actions can hit loopback/private/link-local IPs (do NOT enable in production)"
         );
     }
+    let rule_engine = rules::RuleEngine::new();
     let state = http::AppState {
-        db,
+        db: db.clone(),
         jwt_secret: auth::JwtSecret::from_string(&cfg.auth.jwt_secret),
         session_ttl_secs,
-        rule_engine: rules::RuleEngine::new(),
+        rule_engine: rule_engine.clone(),
         actions_cfg: cfg.actions.clone(),
     };
+    let _scheduler = rules::scheduler::spawn(
+        db.clone(),
+        rule_engine,
+        cfg.actions.clone(),
+        http::DEFAULT_BRANCH_ID,
+        cfg.rules.cron_tick_secs,
+    );
+    tracing::info!(
+        tick_secs = cfg.rules.cron_tick_secs,
+        "cron scheduler spawned"
+    );
     let listener = tokio::net::TcpListener::bind(cfg.server.bind)
         .await
         .with_context(|| format!("binding {}", cfg.server.bind))?;
