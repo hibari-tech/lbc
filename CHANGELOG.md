@@ -15,6 +15,18 @@ once we tag a `v1.0.0`.
   Persists to `event` table; uses payload's `kind` field if present,
   else `"webhook"`. Spec `lbcspec.md` §4.1 first bullet, §5.4 replay
   protection.
+- **Rule hold-for** — third `lbcspec.md` §4.2 time primitive. Rule
+  definitions can carry `hold_for_secs: <i64>`; the dispatcher fires
+  the rule only once the script has matched continuously for at
+  least that many seconds. The first match of a streak doesn't fire
+  but starts a hold timer; subsequent matches keep extending the
+  streak until the window elapses, at which point the next match
+  fires (and the streak resets). Any non-matching event clears the
+  streak — the next match starts a fresh hold cycle. Composable with
+  throttle / debounce — those checks still apply once hold-for
+  satisfies. Use case: "alert if the door has been open for 30 s."
+  New `RuleEngine::set_hold_start` / `hold_start_at` / `clear_hold`
+  primitives.
 - **SMTP action** — `kind: "smtp"` action descriptors send email via
   STARTTLS or implicit-TLS to a globally-configured SMTP server.
   Server / port / credentials / default `From:` live in

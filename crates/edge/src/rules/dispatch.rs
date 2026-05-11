@@ -76,7 +76,39 @@ pub async fn evaluate_event(
                 continue;
             }
         };
-        if !outcome.matched {
+        // Hold-for: require the script to match continuously for
+        // `hold_for_secs`. A non-matching event clears the streak; a
+        // matching event either starts/extends the streak or — once the
+        // window has elapsed — falls through to the firing path. The
+        // throttle / debounce checks below still apply on fire.
+        if let Some(hold_window) = extract_hold_for_ms(&definition_text) {
+            if !outcome.matched {
+                engine.clear_hold(rule_id);
+                continue;
+            }
+            match engine.hold_start_at(rule_id) {
+                None => {
+                    engine.set_hold_start(rule_id, now);
+                    tracing::debug!(rule_id, window_ms = hold_window, "hold-for streak started");
+                    continue;
+                }
+                Some(start) if now.saturating_sub(start) < hold_window => {
+                    tracing::debug!(
+                        rule_id,
+                        window_ms = hold_window,
+                        elapsed_ms = now.saturating_sub(start),
+                        "hold-for still in progress"
+                    );
+                    continue;
+                }
+                Some(_) => {
+                    // Streak satisfied — fall through to the existing
+                    // throttle / debounce / fire path. Clear the hold
+                    // so the next streak requires another full window.
+                    engine.clear_hold(rule_id);
+                }
+            }
+        } else if !outcome.matched {
             continue;
         }
         // Debounce: leading-edge — fire on the first match of a burst,
@@ -172,6 +204,11 @@ fn extract_throttle_ms(definition_json: &str) -> Option<i64> {
 /// Read `definition.debounce_secs` and convert to milliseconds.
 fn extract_debounce_ms(definition_json: &str) -> Option<i64> {
     extract_window_ms(definition_json, "debounce_secs")
+}
+
+/// Read `definition.hold_for_secs` and convert to milliseconds.
+fn extract_hold_for_ms(definition_json: &str) -> Option<i64> {
+    extract_window_ms(definition_json, "hold_for_secs")
 }
 
 fn extract_window_ms(definition_json: &str, field: &str) -> Option<i64> {

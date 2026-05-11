@@ -606,3 +606,236 @@ async fn dispatch_without_debounce_unchanged() {
         .unwrap();
     assert_eq!(count, 3);
 }
+
+#[test]
+fn engine_records_clears_and_reads_hold_start() {
+    let engine = RuleEngine::new();
+    engine.compile_or_fetch(101, 1, "true").expect("compile");
+    assert!(engine.hold_start_at(101).is_none());
+    engine.set_hold_start(101, 1000);
+    assert_eq!(engine.hold_start_at(101), Some(1000));
+    engine.clear_hold(101);
+    assert!(engine.hold_start_at(101).is_none());
+}
+
+#[tokio::test]
+async fn dispatch_hold_for_first_match_does_not_fire() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#,
+        "hold_for_secs": 30,
+    }))
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'hold-once', 1, ?, 1, 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    let event_id: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let _ = evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "first match starts the streak; doesn't fire");
+}
+
+#[tokio::test]
+async fn dispatch_hold_for_within_window_does_not_fire() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#,
+        "hold_for_secs": 3600,
+    }))
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'hold-burst', 1, ?, 1, 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    // Five rapid matches — streak starts at the first, none fire because
+    // wall-clock can't possibly advance 3600 s in this loop.
+    for _ in 0..5 {
+        let event_id: i64 = sqlx::query_scalar(
+            "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+             VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+        )
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+        evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+            .await
+            .unwrap();
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn dispatch_hold_for_fires_after_window() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#,
+        "hold_for_secs": 30,
+    }))
+    .unwrap();
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'hold-fire', 1, ?, 1, 0, 0) RETURNING id",
+    )
+    .bind(&definition)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    // First match — starts the streak.
+    let e1: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    evaluate_event(&app.db, &engine, &Default::default(), 1, e1)
+        .await
+        .unwrap();
+    // Backdate the streak start so the next match looks N+1 seconds later.
+    engine.set_hold_start(rule_id, 0);
+    let e2: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    evaluate_event(&app.db, &engine, &Default::default(), 1, e2)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run WHERE rule_id = ?")
+        .bind(rule_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "match after hold window must fire");
+    assert!(
+        engine.hold_start_at(rule_id).is_none(),
+        "hold cleared after fire"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_hold_for_non_match_resets_streak() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#,
+        "hold_for_secs": 30,
+    }))
+    .unwrap();
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'hold-reset', 1, ?, 1, 0, 0) RETURNING id",
+    )
+    .bind(&definition)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    // First match — streak starts.
+    let e1: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    evaluate_event(&app.db, &engine, &Default::default(), 1, e1)
+        .await
+        .unwrap();
+    assert!(engine.hold_start_at(rule_id).is_some());
+    // Non-matching event — streak resets.
+    let e2: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'tamper', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    evaluate_event(&app.db, &engine, &Default::default(), 1, e2)
+        .await
+        .unwrap();
+    assert!(
+        engine.hold_start_at(rule_id).is_none(),
+        "non-match must clear the hold streak"
+    );
+    // Even after backdating, no fire should happen because the streak is None.
+    let e3: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    evaluate_event(&app.db, &engine, &Default::default(), 1, e3)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run WHERE rule_id = ?")
+        .bind(rule_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "interrupted streak does not fire on resume");
+    // The fresh motion event should have started a new streak.
+    assert!(engine.hold_start_at(rule_id).is_some());
+}
+
+#[tokio::test]
+async fn dispatch_without_hold_for_fires_on_first_match() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({
+        "script": r#"event.kind == "motion""#,
+    }))
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'no-hold', 1, ?, 1, 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    let event_id: i64 = sqlx::query_scalar(
+        "INSERT INTO event (branch_id, kind, ts, payload, ingest_ts) \
+         VALUES (1, 'motion', 0, '{}', 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    evaluate_event(&app.db, &engine, &Default::default(), 1, event_id)
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "regression: no hold_for, fire as usual");
+}

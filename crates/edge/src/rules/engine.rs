@@ -71,6 +71,10 @@ struct CacheEntry {
     /// from `last_fired_at` because a debounced match still updates this
     /// (so the burst-end check keeps sliding) but does not produce a fire.
     last_match_at: Option<i64>,
+    /// Server-clock unix-ms when the current hold-for cycle started, i.e.
+    /// the first match in a streak of matches. `None` = not currently
+    /// holding (either no match seen yet or the streak broke).
+    hold_start_at: Option<i64>,
 }
 
 /// Cloneable handle around a sandboxed Rhai engine plus a shared,
@@ -144,6 +148,7 @@ impl RuleEngine {
                     script: script.clone(),
                     last_fired_at: None,
                     last_match_at: None,
+                    hold_start_at: None,
                 },
             );
         }
@@ -182,6 +187,32 @@ impl RuleEngine {
         if let Ok(mut guard) = self.cache.write() {
             if let Some(entry) = guard.get_mut(&rule_id) {
                 entry.last_match_at = Some(now_ms);
+            }
+        }
+    }
+
+    /// Returns the unix-ms when the current `hold_for` cycle began —
+    /// the timestamp of the first match in a continuous streak — or
+    /// `None` if no streak is in progress.
+    pub fn hold_start_at(&self, rule_id: i64) -> Option<i64> {
+        self.cache.read().ok()?.get(&rule_id)?.hold_start_at
+    }
+
+    /// Mark the beginning of a hold-for streak at `now_ms`.
+    pub fn set_hold_start(&self, rule_id: i64, now_ms: i64) {
+        if let Ok(mut guard) = self.cache.write() {
+            if let Some(entry) = guard.get_mut(&rule_id) {
+                entry.hold_start_at = Some(now_ms);
+            }
+        }
+    }
+
+    /// Clear the hold-for streak — either because a non-matching event
+    /// broke it or because the window elapsed and the rule fired.
+    pub fn clear_hold(&self, rule_id: i64) {
+        if let Ok(mut guard) = self.cache.write() {
+            if let Some(entry) = guard.get_mut(&rule_id) {
+                entry.hold_start_at = None;
             }
         }
     }
