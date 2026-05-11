@@ -9,6 +9,8 @@
 
 pub mod dispatch;
 pub mod engine;
+pub mod scheduler;
 
 pub use dispatch::evaluate_event;
 pub use engine::{Outcome, RuleEngine, Script};
+pub use scheduler::{evaluate_scheduled, parse_schedule, ScheduledReport};

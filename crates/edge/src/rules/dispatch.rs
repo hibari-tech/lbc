@@ -127,39 +127,12 @@ pub async fn evaluate_event(
                 continue;
             }
         }
-        let rule_run_id = persist_rule_run(db, rule_id, event_id, &outcome)
+        let rule_run_id = persist_rule_run(db, rule_id, &[event_id], &outcome, now)
             .await
             .with_context(|| format!("persisting rule_run for rule {rule_id}"))?;
         engine.record_fire(rule_id, now);
         matched.push(rule_id);
-        for action in &outcome.actions {
-            match actions::dispatch(db, actions_cfg, rule_run_id, action).await {
-                Ok(ActionResult {
-                    ok: false,
-                    response,
-                    status,
-                    ..
-                }) => {
-                    tracing::warn!(
-                        rule_id,
-                        kind = %action.kind,
-                        target = %action.target,
-                        status,
-                        response = %response,
-                        "action dispatch reported failure"
-                    );
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::error!(
-                        rule_id,
-                        kind = %action.kind,
-                        error = ?e,
-                        "action dispatch errored"
-                    );
-                }
-            }
-        }
+        dispatch_actions(db, actions_cfg, rule_id, rule_run_id, &outcome.actions).await;
     }
 
     Ok(EvaluationReport {
@@ -189,12 +162,51 @@ async fn load_event(db: &Db, branch_id: i64, event_id: i64) -> anyhow::Result<Ev
     })
 }
 
-fn extract_script(definition_json: &str) -> Option<String> {
+pub(super) fn extract_script(definition_json: &str) -> Option<String> {
     let value: Value = serde_json::from_str(definition_json).ok()?;
     value
         .get("script")
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+/// Dispatch every action in `actions`, logging — but not propagating —
+/// per-action failures. Shared with the cron scheduler.
+pub(super) async fn dispatch_actions(
+    db: &Db,
+    actions_cfg: &ActionsConfig,
+    rule_id: i64,
+    rule_run_id: i64,
+    actions: &[crate::actions::ActionRequest],
+) {
+    for action in actions {
+        match actions::dispatch(db, actions_cfg, rule_run_id, action).await {
+            Ok(ActionResult {
+                ok: false,
+                response,
+                status,
+                ..
+            }) => {
+                tracing::warn!(
+                    rule_id,
+                    kind = %action.kind,
+                    target = %action.target,
+                    status,
+                    response = %response,
+                    "action dispatch reported failure"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!(
+                    rule_id,
+                    kind = %action.kind,
+                    error = ?e,
+                    "action dispatch errored"
+                );
+            }
+        }
+    }
 }
 
 fn extract_throttle_ms(definition_json: &str) -> Option<i64> {
@@ -220,20 +232,21 @@ fn extract_window_ms(definition_json: &str, field: &str) -> Option<i64> {
     Some(secs.saturating_mul(1000))
 }
 
-async fn persist_rule_run(
+pub(super) async fn persist_rule_run(
     db: &Db,
     rule_id: i64,
-    event_id: i64,
+    input_event_ids: &[i64],
     outcome: &Outcome,
+    fired_at: i64,
 ) -> anyhow::Result<i64> {
-    let input_event_ids = serde_json::to_string(&[event_id]).unwrap_or_else(|_| "[]".into());
+    let input_event_ids = serde_json::to_string(input_event_ids).unwrap_or_else(|_| "[]".into());
     let outcomes = serde_json::to_string(outcome).unwrap_or_else(|_| "{}".into());
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
          VALUES (?, ?, ?, ?) RETURNING id",
     )
     .bind(rule_id)
-    .bind(now_ms())
+    .bind(fired_at)
     .bind(input_event_ids)
     .bind(outcomes)
     .fetch_one(db.pool())
@@ -241,7 +254,7 @@ async fn persist_rule_run(
     Ok(id)
 }
 
-fn now_ms() -> i64 {
+pub(super) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))

@@ -6,6 +6,7 @@ mod common;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use edge::rules::engine::EventForRule;
+use edge::rules::scheduler::{evaluate_scheduled, next_after, parse_schedule};
 use edge::rules::{evaluate_event, Outcome, RuleEngine};
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
@@ -838,4 +839,225 @@ async fn dispatch_without_hold_for_fires_on_first_match() {
         .await
         .unwrap();
     assert_eq!(count, 1, "regression: no hold_for, fire as usual");
+}
+
+// --- cron scheduler -------------------------------------------------------
+
+#[test]
+fn parse_schedule_accepts_seven_field_expression() {
+    // Every 30 seconds — 7-field format (sec min hour DoM Month DoW Year).
+    assert!(parse_schedule("*/30 * * * * * *").is_ok());
+}
+
+#[test]
+fn parse_schedule_rejects_empty_and_garbage() {
+    assert!(parse_schedule("").is_err());
+    assert!(parse_schedule("   ").is_err());
+    assert!(parse_schedule("not a cron").is_err());
+}
+
+#[test]
+fn next_after_advances_strictly_forward() {
+    let s = parse_schedule("0 0 * * * * *").expect("parse");
+    // 09:30:00 UTC on some arbitrary day.
+    let base_ms = 1_700_000_000_000_i64;
+    let n1 = next_after(&s, base_ms).expect("next");
+    assert!(n1 > base_ms, "next must be strictly after");
+    let n2 = next_after(&s, n1).expect("next2");
+    assert!(n2 > n1);
+    // Top-of-hour granularity: n2 - n1 == 1h.
+    assert_eq!(n2 - n1, 60 * 60 * 1000);
+}
+
+async fn seed_scheduled_rule(
+    db: &edge::storage::Db,
+    name: &str,
+    script: &str,
+    schedule: &str,
+) -> i64 {
+    let definition = serde_json::to_string(&json!({ "script": script })).unwrap();
+    sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, schedule, created_at, updated_at) \
+         VALUES (1, ?, 1, ?, 1, ?, 0, 0) RETURNING id",
+    )
+    .bind(name)
+    .bind(&definition)
+    .bind(schedule)
+    .fetch_one(db.pool())
+    .await
+    .expect("insert scheduled rule")
+}
+
+#[tokio::test]
+async fn scheduler_first_observation_seeds_without_firing() {
+    let app = test_app().await;
+    let rule_id = seed_scheduled_rule(&app.db, "every-minute", "true", "0 * * * * * *").await;
+    let engine = RuleEngine::new();
+    let report = evaluate_scheduled(&app.db, &engine, &Default::default(), 1, now_ms())
+        .await
+        .unwrap();
+    assert!(
+        report.fired_rule_ids.is_empty(),
+        "first observation must not fire"
+    );
+    assert!(
+        engine.next_fire_at(rule_id).is_some(),
+        "next_fire_at should be seeded after first observation"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn scheduler_fires_when_next_fire_at_has_elapsed() {
+    let app = test_app().await;
+    let rule_id = seed_scheduled_rule(&app.db, "tick", "true", "*/5 * * * * * *").await;
+    let engine = RuleEngine::new();
+    // Seed via first call.
+    evaluate_scheduled(&app.db, &engine, &Default::default(), 1, 1_000_000_000_000)
+        .await
+        .unwrap();
+    let seeded = engine.next_fire_at(rule_id).expect("seeded");
+    // Tick at exactly the planned fire time → fires.
+    let report = evaluate_scheduled(&app.db, &engine, &Default::default(), 1, seeded)
+        .await
+        .unwrap();
+    assert_eq!(report.fired_rule_ids, vec![rule_id]);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    // next_fire_at advanced past the fire time.
+    let after = engine.next_fire_at(rule_id).expect("advanced");
+    assert!(after > seeded);
+    // rule_run row has an empty input_event_ids array (scheduled, not event-driven).
+    let input: String = sqlx::query_scalar("SELECT input_event_ids FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(input, "[]");
+}
+
+#[tokio::test]
+async fn scheduler_does_not_fire_before_next_fire_at() {
+    let app = test_app().await;
+    let rule_id = seed_scheduled_rule(&app.db, "hourly", "true", "0 0 * * * * *").await;
+    let engine = RuleEngine::new();
+    evaluate_scheduled(&app.db, &engine, &Default::default(), 1, 1_700_000_000_000)
+        .await
+        .unwrap();
+    let next = engine.next_fire_at(rule_id).expect("seeded");
+    // Tick one millisecond before the schedule → no fire.
+    let report = evaluate_scheduled(&app.db, &engine, &Default::default(), 1, next - 1)
+        .await
+        .unwrap();
+    assert!(report.fired_rule_ids.is_empty());
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn scheduler_ignores_event_driven_rules() {
+    let app = test_app().await;
+    // Rule with NULL schedule — purely event-driven.
+    let definition = serde_json::to_string(&json!({ "script": "true" })).unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'event-only', 1, ?, 1, 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    let report = evaluate_scheduled(&app.db, &engine, &Default::default(), 1, now_ms())
+        .await
+        .unwrap();
+    assert!(report.fired_rule_ids.is_empty());
+}
+
+#[tokio::test]
+async fn scheduler_skips_disabled_scheduled_rules() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({ "script": "true" })).unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, schedule, created_at, updated_at) \
+         VALUES (1, 'disabled-cron', 1, ?, 0, '*/1 * * * * * *', 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    evaluate_scheduled(&app.db, &engine, &Default::default(), 1, now_ms())
+        .await
+        .unwrap();
+    let report = evaluate_scheduled(&app.db, &engine, &Default::default(), 1, now_ms() + 60_000)
+        .await
+        .unwrap();
+    assert!(report.fired_rule_ids.is_empty());
+}
+
+#[tokio::test]
+async fn scheduler_skips_invalid_cron_expression() {
+    let app = test_app().await;
+    let definition = serde_json::to_string(&json!({ "script": "true" })).unwrap();
+    sqlx::query(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, schedule, created_at, updated_at) \
+         VALUES (1, 'broken', 1, ?, 1, 'not a cron', 0, 0)",
+    )
+    .bind(&definition)
+    .execute(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    let report = evaluate_scheduled(&app.db, &engine, &Default::default(), 1, now_ms())
+        .await
+        .unwrap();
+    assert!(report.fired_rule_ids.is_empty());
+}
+
+#[tokio::test]
+async fn scheduler_recovers_after_eval_error_by_advancing_schedule() {
+    let app = test_app().await;
+    // Script that errors at runtime.
+    let definition = serde_json::to_string(&json!({
+        "script": "throw \"boom\"",
+    }))
+    .unwrap();
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, schedule, created_at, updated_at) \
+         VALUES (1, 'broken-script', 1, ?, 1, '*/5 * * * * * *', 0, 0) RETURNING id",
+    )
+    .bind(&definition)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let engine = RuleEngine::new();
+    evaluate_scheduled(&app.db, &engine, &Default::default(), 1, 1_000_000_000_000)
+        .await
+        .unwrap();
+    let seeded = engine.next_fire_at(rule_id).expect("seeded");
+    // Fire-time tick: script errors → no rule_run row, but schedule advanced.
+    let report = evaluate_scheduled(&app.db, &engine, &Default::default(), 1, seeded)
+        .await
+        .unwrap();
+    assert!(report.fired_rule_ids.is_empty());
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rule_run")
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let advanced = engine.next_fire_at(rule_id).expect("advanced");
+    assert!(
+        advanced > seeded,
+        "schedule should advance even after eval error"
+    );
 }
