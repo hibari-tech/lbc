@@ -15,6 +15,16 @@ once we tag a `v1.0.0`.
   Persists to `event` table; uses payload's `kind` field if present,
   else `"webhook"`. Spec `lbcspec.md` §4.1 first bullet, §5.4 replay
   protection.
+- **SMTP action** — `kind: "smtp"` action descriptors send email via
+  STARTTLS or implicit-TLS to a globally-configured SMTP server.
+  Server / port / credentials / default `From:` live in
+  `actions.smtp.*` config; rule scripts pass `to`, `subject`, `body`,
+  optional `from`. SMTP body accepts plain strings (sent as-is) or
+  JSON (stringified). Empty `server` disables SMTP — actions return
+  an explicit "SMTP not configured" error row in `action_log` so
+  rule authors get a useful signal.
+  `ActionRequest` grew optional `to`/`subject`/`from` fields and now
+  derives `Default` so existing call sites can `..Default::default()`.
 - **Rule debounce (leading-edge)** — rule definitions can carry
   `debounce_secs: <i64>`; the dispatcher fires the rule on the first
   match of a burst and silently suppresses further matches until

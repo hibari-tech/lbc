@@ -36,6 +36,7 @@ pub async fn test_app() -> TestApp {
         // Production defaults to false via Config::default().
         actions_cfg: ActionsConfig {
             allow_private_targets: true,
+            ..Default::default()
         },
     };
     let router = edge::http::router(state);

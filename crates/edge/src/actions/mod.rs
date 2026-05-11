@@ -1,8 +1,8 @@
 //! Outbound action dispatch.
 //!
-//! Phase 1 first slice: HTTP only. SMTP / FTP / MQTT / Modbus / Nx
-//! Witness all share the same shape (an [`ActionRequest`] descriptor +
-//! a per-kind dispatcher) and land as follow-up modules.
+//! Phase 1 ships `kind = "http"` and `kind = "smtp"`. FTP / MQTT /
+//! Modbus / Nx Witness share the same shape (an [`ActionRequest`]
+//! descriptor + a per-kind dispatcher) and land as follow-up modules.
 //!
 //! All dispatched actions are persisted to the `action_log` table,
 //! linked to the originating `rule_run` row.
@@ -23,6 +23,7 @@
 //!   `LBC_EDGE_ACTIONS__ALLOW_PRIVATE_TARGETS=true` or in the TOML.
 
 pub mod http;
+pub mod smtp;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -37,23 +38,62 @@ use crate::storage::Db;
 pub struct ActionsConfig {
     #[serde(default)]
     pub allow_private_targets: bool,
+    /// SMTP server connection details. Empty `server` disables SMTP
+    /// actions — any `kind: "smtp"` dispatch records an error row
+    /// explaining how to configure it.
+    #[serde(default)]
+    pub smtp: SmtpConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SmtpConfig {
+    /// SMTP server hostname. Empty disables SMTP.
+    #[serde(default)]
+    pub server: String,
+    /// SMTP server port. Default 587 (STARTTLS). 465 for implicit TLS.
+    #[serde(default)]
+    pub port: u16,
+    /// Username for SMTP AUTH. Empty = no auth.
+    #[serde(default)]
+    pub username: String,
+    /// Password for SMTP AUTH.
+    #[serde(default)]
+    pub password: String,
+    /// Default `From:` address used when an action omits `from`.
+    #[serde(default)]
+    pub from_default: String,
+    /// If true, use implicit TLS (port 465 style). If false, use
+    /// STARTTLS on plain TCP (port 587 style).
+    #[serde(default)]
+    pub implicit_tls: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ActionRequest {
-    /// Discriminator. Phase 1 only `"http"`.
+    /// Discriminator. `"http"` or `"smtp"`.
     pub kind: String,
-    /// Destination — for HTTP, the URL.
+    /// For HTTP, the URL. For SMTP, unused (server comes from config).
+    #[serde(default)]
     pub target: String,
-    /// HTTP method. Defaults to `POST` if absent.
+    /// HTTP method. Defaults to `POST` if absent. Ignored by SMTP.
     #[serde(default)]
     pub method: Option<String>,
-    /// Optional outbound headers.
+    /// HTTP headers (`Content-Type` etc.). Ignored by SMTP.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
-    /// Optional JSON body. Sent as `application/json`.
+    /// HTTP: JSON body. SMTP: plain-text or JSON-stringified body.
     #[serde(default)]
     pub body: Option<Value>,
+    /// SMTP recipients. Ignored by HTTP.
+    #[serde(default)]
+    pub to: Vec<String>,
+    /// SMTP `Subject:` header. Ignored by HTTP.
+    #[serde(default)]
+    pub subject: Option<String>,
+    /// SMTP `From:` address. Falls back to `SmtpConfig::from_default`
+    /// when absent. Ignored by HTTP.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,6 +118,7 @@ pub async fn dispatch(
 ) -> anyhow::Result<ActionResult> {
     let result = match action.kind.as_str() {
         "http" => http::execute(action, cfg).await,
+        "smtp" => smtp::execute(action, &cfg.smtp).await,
         other => ActionResult {
             ok: false,
             status: 0,
