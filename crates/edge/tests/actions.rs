@@ -258,9 +258,9 @@ async fn action_dispatch_unknown_kind_logs_error_row() {
     .await
     .unwrap();
     let action = ActionRequest {
-        // smtp is now supported; pick something that still isn't.
-        kind: "modbus".into(),
-        target: "tcp://10.0.0.1:502".into(),
+        // http/smtp/mqtt/modbus are supported; pick something still pending.
+        kind: "ftp".into(),
+        target: "ftp://10.0.0.1/upload/file.txt".into(),
         method: None,
         headers: Default::default(),
         body: None,
@@ -785,6 +785,219 @@ async fn mqtt_dispatch_with_no_server_configured_records_error() {
         "got: {}",
         result.response
     );
+    let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
+        .bind(rule_run_id)
+        .fetch_one(app.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(status, "error");
+}
+
+// --- modbus plan_request --------------------------------------------------
+
+#[test]
+fn modbus_plan_request_write_coil_with_bool_body() {
+    use edge::actions::modbus::{plan_request, ModbusOp};
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "10.0.0.5:502".into(),
+        function: Some("write_coil".into()),
+        unit_id: Some(2),
+        address: Some(42),
+        body: Some(json!(true)),
+        ..Default::default()
+    };
+    let plan = plan_request(&action).expect("plan");
+    assert_eq!(plan.unit_id, 2);
+    assert_eq!(plan.address, 42);
+    assert_eq!(plan.op, ModbusOp::WriteCoil(true));
+}
+
+#[test]
+fn modbus_plan_request_write_register_with_int_body() {
+    use edge::actions::modbus::{plan_request, ModbusOp};
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "10.0.0.5:502".into(),
+        function: Some("write_register".into()),
+        address: Some(100),
+        body: Some(json!(1234)),
+        ..Default::default()
+    };
+    let plan = plan_request(&action).expect("plan");
+    assert_eq!(plan.unit_id, 1, "unit_id defaults to 1");
+    assert_eq!(plan.op, ModbusOp::WriteRegister(1234));
+}
+
+#[test]
+fn modbus_plan_request_rejects_empty_target() {
+    use edge::actions::modbus::plan_request;
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        function: Some("write_coil".into()),
+        address: Some(0),
+        body: Some(json!(true)),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(err.contains("target"), "expected target error, got: {err}");
+}
+
+#[test]
+fn modbus_plan_request_rejects_non_socketaddr_target() {
+    use edge::actions::modbus::plan_request;
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "plc.example.com:502".into(),
+        function: Some("write_coil".into()),
+        address: Some(0),
+        body: Some(json!(true)),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(
+        err.contains("SocketAddr"),
+        "expected SocketAddr error, got: {err}"
+    );
+}
+
+#[test]
+fn modbus_plan_request_rejects_missing_function() {
+    use edge::actions::modbus::plan_request;
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "10.0.0.5:502".into(),
+        address: Some(0),
+        body: Some(json!(true)),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(
+        err.contains("function"),
+        "expected function error, got: {err}"
+    );
+}
+
+#[test]
+fn modbus_plan_request_rejects_unsupported_function() {
+    use edge::actions::modbus::plan_request;
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "10.0.0.5:502".into(),
+        function: Some("read_coils".into()),
+        address: Some(0),
+        body: Some(json!(0)),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(
+        err.contains("unsupported"),
+        "expected unsupported error, got: {err}"
+    );
+}
+
+#[test]
+fn modbus_plan_request_rejects_missing_address() {
+    use edge::actions::modbus::plan_request;
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "10.0.0.5:502".into(),
+        function: Some("write_register".into()),
+        body: Some(json!(1)),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(
+        err.contains("address"),
+        "expected address error, got: {err}"
+    );
+}
+
+#[test]
+fn modbus_plan_request_rejects_register_out_of_range() {
+    use edge::actions::modbus::plan_request;
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "10.0.0.5:502".into(),
+        function: Some("write_register".into()),
+        address: Some(0),
+        body: Some(json!(70_000)),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(err.contains("range"), "expected range error, got: {err}");
+}
+
+#[test]
+fn modbus_plan_request_rejects_unit_id_above_247() {
+    use edge::actions::modbus::plan_request;
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "10.0.0.5:502".into(),
+        function: Some("write_coil".into()),
+        unit_id: Some(255),
+        address: Some(0),
+        body: Some(json!(true)),
+        ..Default::default()
+    };
+    let err = plan_request(&action).unwrap_err();
+    assert!(
+        err.contains("unit_id"),
+        "expected unit_id error, got: {err}"
+    );
+}
+
+#[test]
+fn modbus_plan_request_coil_accepts_integer_zero_one() {
+    use edge::actions::modbus::{plan_request, ModbusOp};
+    let on = ActionRequest {
+        kind: "modbus".into(),
+        target: "10.0.0.5:502".into(),
+        function: Some("write_coil".into()),
+        address: Some(0),
+        body: Some(json!(1)),
+        ..Default::default()
+    };
+    let off = ActionRequest {
+        body: Some(json!(0)),
+        ..on.clone()
+    };
+    assert_eq!(plan_request(&on).unwrap().op, ModbusOp::WriteCoil(true));
+    assert_eq!(plan_request(&off).unwrap().op, ModbusOp::WriteCoil(false));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn modbus_dispatch_records_error_on_unreachable_target() {
+    let app = test_app().await;
+    let rule_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule (branch_id, name, version, definition, enabled, created_at, updated_at) \
+         VALUES (1, 'manual', 1, '{}', 1, 0, 0) RETURNING id",
+    )
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    let rule_run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO rule_run (rule_id, fired_at, input_event_ids, outcomes) \
+         VALUES (?, 0, '[]', '{}') RETURNING id",
+    )
+    .bind(rule_id)
+    .fetch_one(app.db.pool())
+    .await
+    .unwrap();
+    // 127.0.0.1:1 — TCP refused, fast failure.
+    let action = ActionRequest {
+        kind: "modbus".into(),
+        target: "127.0.0.1:1".into(),
+        function: Some("write_coil".into()),
+        unit_id: Some(1),
+        address: Some(0),
+        body: Some(json!(true)),
+        ..Default::default()
+    };
+    let result = dispatch(&app.db, &allow_private(), rule_run_id, &action)
+        .await
+        .unwrap();
+    assert!(!result.ok);
     let status: String = sqlx::query_scalar("SELECT status FROM action_log WHERE rule_run_id = ?")
         .bind(rule_run_id)
         .fetch_one(app.db.pool())

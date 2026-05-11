@@ -7,6 +7,18 @@ once we tag a `v1.0.0`.
 ## Unreleased — Phase 1
 
 ### Added
+- **Modbus/TCP action** — `kind: "modbus"` action descriptors write a
+  coil (FC 0x05) or holding register (FC 0x06) on an industrial device
+  via `tokio-modbus`. Action carries `target` (literal `host:port`),
+  `function` (`write_coil` | `write_register`), `address` (0..=65535),
+  `unit_id` (0..=247, default 1), and `body` (bool/int for coils,
+  0..=65535 int for registers). Per-action connect / write / disconnect
+  with 5 s connect and 10 s write timeouts. Modbus is an industrial LAN
+  protocol with no transport auth — the SSRF guard that gates HTTP
+  intentionally does **not** apply here. New `ActionRequest` fields:
+  `function`, `unit_id`, `address`. `actions::modbus::plan_request` is
+  a pure validator so every parse path is testable without a PLC.
+  Modbus/RTU (serial) and reads (FC 0x01..0x04) are follow-ups.
 - **Rule cron schedules** — fourth `lbcspec.md` §4.2 time primitive. The
   `rule.schedule` column (7-field cron: `sec min hour DoM Month DoW Year`)
   now drives a periodic scheduler task spawned alongside the heartbeat.
