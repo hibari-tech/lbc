@@ -6,6 +6,22 @@ once we tag a `v1.0.0`.
 
 ## Unreleased — Phase 1
 
+### Fixed
+- **HTTP action DNS-rebinding TOCTOU** — `actions::http` used to
+  resolve the target hostname for validation, then let reqwest
+  re-resolve at connect time. A rebind-friendly resolver could
+  return a public IP for the first lookup and a private IP for the
+  second. The validation function (`check_target` →
+  `resolve_and_pin`) now returns the resolved `Vec<SocketAddr>`,
+  and `execute()` pins those exact addresses into the reqwest
+  client via `ClientBuilder::resolve_to_addrs`. Reqwest's connect
+  step now uses the pinned IPs and never re-consults the resolver
+  for that hostname. HTTPS SNI / cert validation still use the URL
+  hostname, so cert pinning is unaffected. New inline tests cover
+  every gate branch plus a round-trip that proves the pinning
+  actually overrides DNS. Closes TOFIX 2026-05-10 "action-layer
+  SSRF — DNS-rebinding TOCTOU window".
+
 ### Added
 - **Admin web HTTP Basic gate** — every `/admin/*` route on the
   Control Plane is now wrapped in a middleware that requires
