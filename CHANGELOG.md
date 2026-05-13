@@ -6,6 +6,27 @@ once we tag a `v1.0.0`.
 
 ## Unreleased — Phase 1
 
+### Changed
+- **Edge fingerprint — multi-component probe (§7.3 part 1)** —
+  `fingerprint::compute()` now gathers a structured component map
+  rather than concatenating hostname + MAC. New components on Linux:
+  `os_install_id` (`/etc/machine-id`), `cpu_brand` (first
+  `model name` from `/proc/cpuinfo`), `product_uuid`,
+  `product_serial`, `board_serial` (`/sys/class/dmi/id/`). Existing
+  `hostname` + `primary_mac` are preserved. Each probe handles a
+  missing/unreadable source by dropping that component — non-Linux
+  hosts naturally land with `hostname` + `primary_mac` only.
+  The map is serialised as canonical JSON (sorted keys via
+  `BTreeMap`) and hashed with BLAKE3 under a bumped version label
+  `lbc-fingerprint-v1`, so every pre-existing digest is
+  invalidated. Re-activation is already required after the
+  heartbeat bearer-secret rollout, so operators pay the cost once.
+  Public API surface is unchanged: `compute() -> String` still
+  returns a 64-char hex digest. New `collect_components() ->
+  BTreeMap<String, String>` exposed for diagnostics. The N-of-M
+  tolerant comparator on the Control Plane heartbeat handler is
+  the next step — tracked in TOFIX. 8 inline tests.
+
 ### Fixed
 - **HTTP action DNS-rebinding TOCTOU** — `actions::http` used to
   resolve the target hostname for validation, then let reqwest

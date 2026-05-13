@@ -20,5 +20,5 @@ _(none yet)_
 ## Deferred (intentional, with reason)
 
 - [2026-05-10] control-plane DB — currently SQLite for Phase 0 simplicity (no testcontainers, single-binary deploy). Spec §6.1 / TASKS §0.8 target Postgres. Swap before fleet-management goes live in Phase 3; data model is portable across both via sqlx.
-- [2026-05-10] edge fingerprint — Phase 0 stub uses hostname + primary MAC only. Spec §7.3 requires CPU brand + motherboard / system serial + TPM EK + OS install id with N-of-M tolerant matching. Re-implement before Phase 1 ships paid tiers.
+- [2026-05-11] edge fingerprint — multi-component probe landed (machine-id + DMI serials + CPU brand + hostname + MAC, canonical-JSON-then-BLAKE3, `lbc-fingerprint-v1` label, commit `<filled-in-by-PR>`). N-of-M tolerant matching on the Control Plane heartbeat handler is still pending — currently the digest is byte-compared end-to-end, so a single component change (NIC swap, motherboard battery reset) still invalidates the license. Land tolerant comparison before Phase 1 ships paid tiers.
 - [2026-05-11] control-plane admin web — HTTP Basic gate landed (commit `<filled-in-by-PR>`, argon2-hashed password via `LBC_CP_ADMIN_AUTH__PASSWORD_HASH`), disabled by default with a boot warn. OIDC / SSO per spec §4.9 still pending for Phase 1.
