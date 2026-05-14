@@ -107,7 +107,8 @@ async fn end_to_end_activation_round_trips() {
     let fp = edge::fingerprint::compute();
     assert!(!fp.is_empty(), "fingerprint must be non-empty");
 
-    let resp = edge::activate::activate(&cp_url, "TEST-KEY-001", "store-1", &fp)
+    let components = edge::fingerprint::canonical_json();
+    let resp = edge::activate::activate(&cp_url, "TEST-KEY-001", "store-1", &fp, &components)
         .await
         .expect("activate");
     assert!(resp.issued_license_id > 0);
@@ -137,9 +138,15 @@ async fn activation_with_unknown_key_surfaces_error() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     let fp = edge::fingerprint::compute();
-    let err = edge::activate::activate(&cp_url, "no-such-key", "store-1", &fp)
-        .await
-        .unwrap_err();
+    let err = edge::activate::activate(
+        &cp_url,
+        "no-such-key",
+        "store-1",
+        &fp,
+        &edge::fingerprint::canonical_json(),
+    )
+    .await
+    .unwrap_err();
     assert!(
         format!("{err:#}").contains("400") || format!("{err:#}").contains("unknown"),
         "unexpected error: {err:#}"
@@ -264,16 +271,23 @@ async fn end_to_end_heartbeat_then_revoke_then_degraded() {
     let fp = edge::fingerprint::compute();
 
     // Activate.
-    let resp = edge::activate::activate(&cp_url, "TEST-HB-KEY", "store-1", &fp)
+    let components = edge::fingerprint::canonical_json();
+    let resp = edge::activate::activate(&cp_url, "TEST-HB-KEY", "store-1", &fp, &components)
         .await
         .expect("activate");
     let issued_id = resp.issued_license_id;
 
     // Drive a single heartbeat directly (rather than spawning the periodic
     // task) so the test stays deterministic.
-    let hb = edge::heartbeat::post_heartbeat(&cp_url, issued_id, &fp, &resp.heartbeat_token)
-        .await
-        .expect("first heartbeat");
+    let hb = edge::heartbeat::post_heartbeat(
+        &cp_url,
+        issued_id,
+        &fp,
+        Some(&components),
+        &resp.heartbeat_token,
+    )
+    .await
+    .expect("first heartbeat");
     assert!(hb.last_seen > 0);
 
     // Health handle starts healthy after a successful heartbeat.
@@ -295,8 +309,14 @@ async fn end_to_end_heartbeat_then_revoke_then_degraded() {
         .expect("revoke");
     assert_eq!(revoke.status(), reqwest::StatusCode::NO_CONTENT);
 
-    let post_revoke =
-        edge::heartbeat::post_heartbeat(&cp_url, issued_id, &fp, &resp.heartbeat_token).await;
+    let post_revoke = edge::heartbeat::post_heartbeat(
+        &cp_url,
+        issued_id,
+        &fp,
+        Some(&components),
+        &resp.heartbeat_token,
+    )
+    .await;
     assert!(
         post_revoke.is_err(),
         "heartbeat after revoke must fail; got {:?}",

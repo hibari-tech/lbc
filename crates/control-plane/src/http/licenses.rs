@@ -37,8 +37,16 @@ pub struct ActivateRequest {
     pub license_key: String,
     /// Human-readable branch name unique within the account.
     pub branch_name: String,
-    /// Multi-factor hardware fingerprint produced by the edge.
+    /// Hex BLAKE3 digest of the edge's hardware fingerprint.
     pub hardware_fingerprint: String,
+    /// Canonical-JSON of the edge's multi-component fingerprint
+    /// map. Stored verbatim and used by the heartbeat handler for
+    /// N-of-M tolerant comparison (see
+    /// [`shared::fingerprint::compare_tolerant`]). Empty string is
+    /// accepted for backwards-compat with legacy edges — that row
+    /// will simply fall back to digest byte-compare on heartbeat.
+    #[serde(default)]
+    pub hardware_components: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -153,11 +161,16 @@ pub async fn activate(
     let secret_hash = blake3::hash(&secret);
     let heartbeat_token = hex::encode(secret);
 
+    let components_for_storage: Option<&str> = if req.hardware_components.is_empty() {
+        None
+    } else {
+        Some(req.hardware_components.as_str())
+    };
     let issued_id: i64 = sqlx::query_scalar(
         "INSERT INTO issued_license \
             (license_key_id, branch_id, payload, signature, issued_at, expires_at, \
-             heartbeat_secret_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+             heartbeat_secret_hash, hardware_components) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(key_id)
     .bind(branch_id)
@@ -166,6 +179,7 @@ pub async fn activate(
     .bind(now_ms)
     .bind(expires_at)
     .bind(secret_hash.as_bytes().as_slice())
+    .bind(components_for_storage)
     .fetch_one(state.db.pool())
     .await?;
 
@@ -208,10 +222,16 @@ async fn upsert_branch(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HeartbeatRequest {
-    /// The same fingerprint the edge presented at activation time. Mismatch
-    /// returns 401 — the license cannot be relayed to a different machine
-    /// and still heartbeat.
+    /// The same fingerprint digest the edge presented at activation
+    /// time. Used as the strict-equality fallback when either side
+    /// of the tolerant component compare is missing.
     pub hardware_fingerprint: String,
+    /// Canonical-JSON of the edge's *current* component map. If
+    /// both this and the stored value are populated, the CP uses
+    /// [`shared::fingerprint::compare_tolerant`]; otherwise it
+    /// falls back to byte-comparing the digest above.
+    #[serde(default)]
+    pub hardware_components: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -248,7 +268,7 @@ pub async fn heartbeat(
     let presented = extract_bearer_token(&headers).ok_or(ApiError::Unauthorized)?;
 
     let row = sqlx::query(
-        "SELECT payload, expires_at, revoked_at, heartbeat_secret_hash \
+        "SELECT payload, expires_at, revoked_at, heartbeat_secret_hash, hardware_components \
          FROM issued_license WHERE id = ?",
     )
     .bind(id)
@@ -268,7 +288,22 @@ pub async fn heartbeat(
     let payload_text: String = row.get("payload");
     let payload: LicensePayload = serde_json::from_str(&payload_text)
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("decoding stored payload: {e}")))?;
-    if payload.hardware_fingerprint != req.hardware_fingerprint {
+
+    // Tolerant component compare when both sides have a populated
+    // map; otherwise fall back to digest byte-compare. This keeps
+    // pre-migration rows working until they re-activate.
+    let stored_components: Option<String> = row.get("hardware_components");
+    let component_match = match (&stored_components, &req.hardware_components) {
+        (Some(stored), Some(presented)) if !stored.is_empty() && !presented.is_empty() => {
+            Some(shared::fingerprint::compare_tolerant(stored, presented))
+        }
+        _ => None,
+    };
+    let accepted = match component_match {
+        Some(ok) => ok,
+        None => payload.hardware_fingerprint == req.hardware_fingerprint,
+    };
+    if !accepted {
         return Err(ApiError::BadRequest("fingerprint mismatch".into()));
     }
     let expires_at: i64 = row.get("expires_at");

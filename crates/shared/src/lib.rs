@@ -2,4 +2,5 @@
 //!
 //! Phase 0 stub. See PLAN.md §A and TASKS.md.
 
+pub mod fingerprint;
 pub mod license;

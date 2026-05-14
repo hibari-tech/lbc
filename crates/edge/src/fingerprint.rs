@@ -74,14 +74,26 @@ pub fn collect_components() -> BTreeMap<String, String> {
 }
 
 pub fn compute() -> Fingerprint {
-    let components = collect_components();
-    // serde_json on a BTreeMap emits keys in sort order, which is
-    // exactly what we need for stability across calls / hosts.
-    let canonical = serde_json::to_vec(&components).expect("serialising a string map cannot fail");
+    let canonical = canonical_json_bytes();
     let mut hasher = blake3::Hasher::new();
     hasher.update(VERSION_LABEL);
     hasher.update(&canonical);
     hasher.finalize().to_hex().to_string()
+}
+
+/// Canonical JSON encoding of the component map. The Control Plane
+/// stores this string at activation time and tolerantly compares it
+/// against the value the edge presents on each heartbeat — see
+/// `shared::fingerprint::compare_tolerant`. Stable across calls
+/// because `BTreeMap` serializes with sorted keys.
+pub fn canonical_json() -> String {
+    String::from_utf8(canonical_json_bytes()).expect("BTreeMap JSON is valid UTF-8")
+}
+
+fn canonical_json_bytes() -> Vec<u8> {
+    // serde_json on a BTreeMap emits keys in sort order, which is
+    // exactly what we need for stability across calls / hosts.
+    serde_json::to_vec(&collect_components()).expect("serialising a string map cannot fail")
 }
 
 fn insert_if_some(map: &mut BTreeMap<String, String>, key: &str, value: Option<String>) {

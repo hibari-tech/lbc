@@ -35,6 +35,11 @@ const MIGRATIONS: &[EmbeddedMigration] = &[
         description: "heartbeat bearer secret",
         sql: include_str!("../migrations/20260511190000_heartbeat_bearer_secret.sql"),
     },
+    EmbeddedMigration {
+        version: 20_260_511_200_000,
+        description: "hardware components column",
+        sql: include_str!("../migrations/20260511200000_hardware_components.sql"),
+    },
 ];
 
 #[derive(Clone)]

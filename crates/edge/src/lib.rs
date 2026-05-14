@@ -63,7 +63,8 @@ async fn run_admin(cfg: Config, cmd: cli::AdminCommand) -> anyhow::Result<()> {
         } => {
             let cp_url = cp_url.unwrap_or(cfg.auth.cp_url.clone());
             let fp = fingerprint::compute();
-            let resp = activate::activate(&cp_url, &license_key, &branch_name, &fp)
+            let components = fingerprint::canonical_json();
+            let resp = activate::activate(&cp_url, &license_key, &branch_name, &fp, &components)
                 .await
                 .context("activating against control plane")?;
             license::save(&cfg.auth.license_path, &resp.license).with_context(|| {

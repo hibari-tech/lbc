@@ -507,3 +507,191 @@ async fn openapi_lists_license_paths() {
     assert!(paths.contains_key("/api/v1/licenses/{id}/heartbeat"));
     assert!(paths.contains_key("/api/v1/licenses/{id}/revoke"));
 }
+
+// --- Tolerant fingerprint matching ---------------------------------------
+//
+// These tests pin down the integration contract of
+// `shared::fingerprint::compare_tolerant` as wired into the heartbeat
+// handler. The algorithm's own branches are covered in
+// `shared::fingerprint::tests`; what we verify here is the wiring:
+// activation persists the components JSON, the heartbeat handler
+// reads it, and the fallback to digest byte-compare engages when
+// either side is missing the component map.
+
+async fn activate_with_components(
+    app: &common::TestApp,
+    key: &str,
+    branch: &str,
+    fp: &str,
+    components: &str,
+) -> (i64, String) {
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post(
+            "/api/v1/licenses/activate",
+            json!({
+                "license_key": key,
+                "branch_name": branch,
+                "hardware_fingerprint": fp,
+                "hardware_components": components,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    (
+        body["issued_license_id"].as_i64().unwrap(),
+        body["heartbeat_token"].as_str().unwrap().to_string(),
+    )
+}
+
+fn components_json(pairs: &[(&str, &str)]) -> String {
+    // BTreeMap insertion order = sorted, which is exactly the
+    // canonical form the edge sends.
+    let map: std::collections::BTreeMap<String, String> = pairs
+        .iter()
+        .map(|(k, v)| ((*k).into(), (*v).into()))
+        .collect();
+    serde_json::to_string(&map).unwrap()
+}
+
+#[tokio::test]
+async fn heartbeat_accepts_single_component_drift() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "tol-drift", "pro", 1).await;
+    let stored = components_json(&[
+        ("hostname", "edge-1"),
+        ("primary_mac", "aa:bb:cc:dd:ee:ff"),
+        ("os_install_id", "abc123"),
+    ]);
+    let (id, token) = activate_with_components(&app, &key, "store", "DIGEST-A", &stored).await;
+
+    // One drift (NIC swap) — tolerant compare accepts.
+    let drifted = components_json(&[
+        ("hostname", "edge-1"),
+        ("primary_mac", "11:22:33:44:55:66"),
+        ("os_install_id", "abc123"),
+    ]);
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({
+                // Digest is intentionally a different string from
+                // activation to prove the byte-compare path is
+                // NOT what's accepting — only the tolerant compare
+                // can pass when the digest disagrees.
+                "hardware_fingerprint": "DIGEST-B",
+                "hardware_components": drifted,
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn heartbeat_rejects_double_component_drift() {
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "tol-double", "pro", 1).await;
+    let stored = components_json(&[
+        ("hostname", "edge-1"),
+        ("primary_mac", "aa:bb:cc:dd:ee:ff"),
+        ("os_install_id", "abc123"),
+    ]);
+    let (id, token) = activate_with_components(&app, &key, "store", "DIGEST-A", &stored).await;
+
+    // Two simultaneous drifts — tolerant compare rejects, digest
+    // also disagrees, so the request fails.
+    let drifted = components_json(&[
+        ("hostname", "edge-2"),
+        ("primary_mac", "11:22:33:44:55:66"),
+        ("os_install_id", "abc123"),
+    ]);
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({
+                "hardware_fingerprint": "DIGEST-B",
+                "hardware_components": drifted,
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn heartbeat_falls_back_to_digest_when_stored_components_absent() {
+    // Legacy row: activation didn't include hardware_components,
+    // so the column is NULL. Even if the edge sends components on
+    // heartbeat, we can't tolerantly compare — fall back to the
+    // strict digest byte-compare we used in Phase 0.
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "tol-legacy", "pro", 1).await;
+    let (id, token) = activate(&app, &key, "store", "DIGEST-A").await;
+
+    // Exact digest match → OK regardless of presented components.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({
+                "hardware_fingerprint": "DIGEST-A",
+                "hardware_components": components_json(&[("hostname", "x")]),
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Digest mismatch and no tolerant fallback → 400.
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            json!({
+                "hardware_fingerprint": "DIGEST-DIFFERENT",
+                "hardware_components": components_json(&[("hostname", "x")]),
+            }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn heartbeat_falls_back_to_digest_when_presented_components_absent() {
+    // Symmetric to the legacy-row case: a new edge with a stored
+    // components map can still heartbeat if it omits the
+    // components field — the stored map can't be compared against
+    // nothing, so we fall back to digest byte-compare.
+    let app = test_app().await;
+    let key = seed_account_and_key(&app.db, "tol-noclient", "pro", 1).await;
+    let stored = components_json(&[("hostname", "h"), ("primary_mac", "m")]);
+    let (id, token) = activate_with_components(&app, &key, "store", "DIGEST-A", &stored).await;
+    let resp = app
+        .router
+        .clone()
+        .oneshot(post_with_bearer(
+            &format!("/api/v1/licenses/{id}/heartbeat"),
+            // Note: no hardware_components key. The handler must
+            // treat this as "no tolerant compare available".
+            json!({ "hardware_fingerprint": "DIGEST-A" }),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}

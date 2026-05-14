@@ -6,6 +6,29 @@ once we tag a `v1.0.0`.
 
 ## Unreleased — Phase 1
 
+### Added
+- **N-of-M tolerant fingerprint matching (§7.3 part 2)** — new
+  `shared::fingerprint::compare_tolerant(stored, presented)`
+  helper: parses both arguments as canonical-JSON component maps,
+  counts overlap (keys present on both sides), and accepts when
+  there are ≥2 overlapping components and at most 1 differs. A
+  single drift (NIC swap, motherboard battery reset, OS
+  re-install) no longer forces re-activation; two simultaneous
+  drifts still do. New migration `20260511200000_hardware_components.sql`
+  adds a nullable `issued_license.hardware_components TEXT`. The
+  activation endpoint accepts an optional `hardware_components`
+  field (canonical JSON) and persists it. The heartbeat endpoint
+  accepts an optional `hardware_components` field and, when both
+  sides are populated, uses tolerant comparison; otherwise it
+  falls back to the Phase-0 digest byte-compare so pre-migration
+  rows and legacy edges keep working. The edge now exposes
+  `fingerprint::canonical_json()` and the heartbeat client
+  re-derives this every tick so the CP sees live hardware state.
+  13 unit tests on the algorithm, 4 integration tests on the
+  wired path (accepts single drift, rejects double drift, both
+  fallback directions). Closes the remaining half of the §7.3
+  TOFIX entry.
+
 ### Changed
 - **Edge fingerprint — multi-component probe (§7.3 part 1)** —
   `fingerprint::compute()` now gathers a structured component map

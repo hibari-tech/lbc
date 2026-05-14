@@ -63,6 +63,13 @@ pub fn compute_status(last_seen_at_ms: i64, now_ms: i64, grace_period_days: u32)
 #[derive(Debug, Serialize)]
 struct HeartbeatRequest<'a> {
     hardware_fingerprint: &'a str,
+    /// Canonical-JSON of the multi-component fingerprint map. The
+    /// CP tolerantly compares this against the activation-time
+    /// components before falling back to digest byte-compare. The
+    /// edge re-derives this from a fresh probe every tick so the
+    /// CP sees the live hardware state, not what was at activation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hardware_components: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +82,7 @@ pub async fn post_heartbeat(
     cp_url: &str,
     issued_license_id: i64,
     hardware_fingerprint: &str,
+    hardware_components: Option<&str>,
     heartbeat_token: &str,
 ) -> anyhow::Result<HeartbeatResponse> {
     let url = format!(
@@ -90,6 +98,7 @@ pub async fn post_heartbeat(
         .bearer_auth(heartbeat_token)
         .json(&HeartbeatRequest {
             hardware_fingerprint,
+            hardware_components,
         })
         .send()
         .await
@@ -193,7 +202,19 @@ pub fn spawn(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tick.tick().await;
-            match post_heartbeat(&cp_url, issued_license_id, &fingerprint, &heartbeat_token).await {
+            // Re-derive the component map every tick so the CP sees
+            // the live hardware state. Cheap (a handful of /sys
+            // reads) compared with the network round-trip.
+            let components = crate::fingerprint::canonical_json();
+            match post_heartbeat(
+                &cp_url,
+                issued_license_id,
+                &fingerprint,
+                Some(&components),
+                &heartbeat_token,
+            )
+            .await
+            {
                 Ok(resp) => {
                     handle.record_success(resp.last_seen).await;
                     let snap = handle.snapshot().await;

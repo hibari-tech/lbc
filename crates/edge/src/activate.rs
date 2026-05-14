@@ -14,6 +14,12 @@ pub struct ActivateRequest<'a> {
     pub license_key: &'a str,
     pub branch_name: &'a str,
     pub hardware_fingerprint: &'a str,
+    /// Canonical-JSON of the multi-component fingerprint map. The
+    /// Control Plane stores this for tolerant heartbeat matching;
+    /// see `shared::fingerprint::compare_tolerant`. May be `""`
+    /// on legacy edges, in which case the CP falls back to digest
+    /// byte-compare.
+    pub hardware_components: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,12 +41,14 @@ pub async fn activate(
     license_key: &str,
     branch_name: &str,
     hardware_fingerprint: &str,
+    hardware_components: &str,
 ) -> anyhow::Result<ActivateResponse> {
     let url = format!("{}/api/v1/licenses/activate", cp_url.trim_end_matches('/'));
     let body = ActivateRequest {
         license_key,
         branch_name,
         hardware_fingerprint,
+        hardware_components,
     };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
